@@ -1,0 +1,73 @@
+using CSV
+using DataFrames
+
+history_path = "C:/Users/rgeyzer/AppData/Roaming/MetaQuotes/Terminal/D0E8209F77C8CF37AD8BF550E51FF075/MQL5/Files/History (MetaQuotes-Demo)/"
+user_input_pair = "EURUSD"
+user_input_tf = "M1"
+a = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+
+H = DataFrame(Date = a[:,1], Time = a[:,2] , Open = a[:,3], High = a[:,4], Low = a[:,5], Close = a[:,6], Volume = a[:,7])
+
+@enum position_type begin
+           Buy = 1
+           Sell = 2
+       end
+
+struct closed_trade
+    ticket
+    open_date
+    open_time
+    open_price
+    volume
+    trade_type::position_type
+    #following only for closed trades
+    swaps
+    close_date
+    close_time
+    close_price
+    PL
+end
+struct open_trade
+    ticket
+    open_date
+    open_time
+    open_price
+    volume
+    trade_type::position_type
+end
+
+function calculate_trade_cost # 20 puips cost for ever trade, swaps= 0.02 for 0.01 lots, wednesday *3
+
+end
+
+
+
+function rsi(ta::TimeArray, n::Int=14; wilder::Bool=false)
+    ret = diff(ta.values)
+    ups = zeros(size(ta.values, 1) - 1, size(ta.values, 2))
+    dns = zeros(size(ta.values, 1) - 1, size(ta.values, 2))
+
+    @inbounds for i in 1:size(ta.values, 1) - 1
+        for j in 1:size(ta.values, 2)
+            if ret[i, j] >= 0
+                ups[i, j] += ret[i, j]
+            else
+                dns[i, j] += ret[i, j]
+            end
+        end
+    end
+
+    upsema = ema(ups, n, wilder=wilder)
+    dnsema = abs.(ema(dns, n, wilder=wilder))
+    rs     = upsema ./ dnsema
+
+    res  = @. 100 - (100 / (1 + rs))
+
+    cname   = String[]
+    cols    = colnames(ta)
+    for c in 1:length(cols)
+        push!(cname, string(cols[c], "_rsi_", n))
+    end
+
+    TimeArray(ta.timestamp[n+1:end], res, cname, ta.meta)
+end

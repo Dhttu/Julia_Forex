@@ -1,0 +1,166 @@
+
+# add daily volume indicators: MSi , MSID , and maybe breakout or larger % than last x
+# add function to calculate MFI and populate all of them - same as RSI but with volume , need to check calculation with MT4 & MT5 chart
+
+# volume only added for D
+# i and hour will be added last after data base done
+
+
+begin # using block
+    using CSV
+    using DataFrames
+    using Statistics
+    using Dates
+end
+
+println("Start -> " , now())
+
+history_path = "C:/Users/rgeyzer/AppData/Roaming/MetaQuotes/Terminal/D0E8209F77C8CF37AD8BF550E51FF075/MQL5/Files/History (MetaQuotes-Demo)/"
+user_input_pair = "EURUSD"
+
+begin # define constants
+    #@enum TimeFrame M1=5 M5=10 M15=15 H1=20 D1=25
+    @enum Color Red=-1 Green=1 NoColor =0
+    #@enum Signal Sell=-1 Buy=1
+    marbuzo_ratio=4
+    history_reduction = 100
+
+    if isnothing(findfirst("JPY" , user_input_pair))
+        pip = 0.0001
+    else
+        pip = 0.01
+    end
+    println("pip value is: " , pip)
+end
+
+    function ATR(index::Int , ATR_length=14::Int)
+        tr =  []
+        for i in 1:ATR_length
+            push!(tr , max(h[index-i , 4] - h[index-i , 5] ,max(h[index-i , 4]-h[index-i , 6] , h[index-i-1 , 6] -h[index-i , 5] )))
+        end
+        atr = mean(tr[1:end])
+        return Int(round(atr/pip))
+    end
+
+
+begin # populate functions
+    function PopulateM15()
+        user_input_tf = "M15"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "Open15" , "High15" , "Low15"  , "Close15" , "Volume15"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  Open15 = r[:,3], High15 = r[:,4], Low15 = r[:,5], Close15 = r[:,6], ATR15M = 0 )
+
+                for i in 50:nrow(h) - history_reduction
+                    h.ATR15M[i+1] = ATR(i) #ATR
+                end
+            insertcols!(h, 3, :Hour => 0)
+            for i in 201:nrow(h)
+                h.Hour[i] = hour(h.Time[i])
+            end
+        return h
+    end
+
+    function PopulateH()
+        user_input_tf = "H1"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "OpenH" , "HighH" , "LowH"  , "CloseH" , "VolumeH"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  OpenH = r[:,3], HighH = r[:,4], LowH = r[:,5], CloseH = r[:,6],ATRH = 0 )
+                for i in 50:nrow(h) - history_reduction
+                    h.ATRH[i+1] = ATR(i) #ATR
+                end
+        return h
+    end
+
+    function PopulateH4()
+        user_input_tf = "H4"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "OpenH4" , "HighH4" , "LowH4"  , "CloseH4" , "VolumeH4"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  OpenH4 = r[:,3], HighH4 = r[:,4], LowH4 = r[:,5], CloseH4 = r[:,6], ATRH4 = 0 )
+        for i in 50:nrow(h) - history_reduction
+            h.ATRH4[i+1] = ATR(i) #ATR
+        end
+        return h
+    end
+    function PopulateD()
+        user_input_tf = "D1"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "OpenD" , "HighD" , "LowD"  , "CloseD" , "VolumeD"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  OpenD = r[:,3], HighD = r[:,4], LowD = r[:,5], CloseD = r[:,6], ATRD = 0)
+                for i in 50:nrow(h) - history_reduction
+                    h.ATRD[i+1] = ATR(i) #ATR
+                end
+        return h
+    end
+
+    function CreateFile(user_input_pair , file_name)
+        history_path = "C:/Users/rgeyzer/AppData/Roaming/MetaQuotes/Terminal/D0E8209F77C8CF37AD8BF550E51FF075/MQL5/Files/History (MetaQuotes-Demo)/"
+        CSV.write(string(history_path ,user_input_pair ,file_name, ".csv") , finalDF[:,:])
+    end
+end
+
+
+
+begin # load data and run indicators
+    println("load data started -> " , now())
+    temp15 = PopulateM15()
+    println("Finished M15 -> " , now())
+    tempH = PopulateH()
+    println("Finished H -> " , now())
+    tempH4 = PopulateH4()
+    println("Finished H4 -> " , now())
+    tempD = PopulateD()
+    println("Finished D -> " , now())
+end
+
+begin # join D&H4
+    h = DataFrame(leftjoin(tempH4,tempD, on = [:"Date", :"Time"]))
+    for i in 2:nrow(h)
+        if ismissing(h.OpenD[i]) # not a D candle
+            h.ATRD[i] = h.ATRD[i-1]
+        end
+    end
+    println("Finished join D&H4 -> " , now())
+end
+
+begin # join H
+    h = DataFrame(leftjoin(tempH , h , on = [:"Date", :"Time"]))
+
+    for i in 2:nrow(h)
+        if ismissing(h.OpenH4[i]) # not a H4 candle
+            h.ATRD[i] = h.ATRD[i-1]
+            h.ATRH4[i] = h.ATRH4[i-1]
+        end
+    end
+    println("Finished join H -> " , now())
+end
+
+begin # join 15M
+    h = DataFrame(leftjoin(temp15 , h ,  on = [:"Date", :"Time"]))
+
+    for i in 2:nrow(h)
+        if ismissing(h.OpenH[i]) # not a H candle
+            h.ATRD[i] = h.ATRD[i-1]
+            h.ATRH4[i] = h.ATRH4[i-1]
+            h.ATRH[i] = h.ATRH[i-1]
+        end
+    end
+    println("Finished join 15m -> " , now())
+end
+
+println("Finished join -> " , now())
+println("Finished DB creation -> " , now())
+println(describe(h))
+finalDF = DataFrame(h[100000:end-50000,:])
+CreateFile(user_input_pair , "ATR")
+println("Finished writing file -> " , now())
+println(describe(finalDF))
+println("Finished all -> " , now())
+#CSV.write(string(history_path , "testfile.csv") , h[end-120000:end-110000,:])

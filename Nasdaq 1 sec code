@@ -1,0 +1,282 @@
+begin # using block
+    using CSV
+    using DataFrames
+    using Statistics
+    using Dates
+end
+
+HeaderRow= ["Serial" , "Date", "Min" , "Sec" , "Ask"  , "Bid" , "Vol" , "Avg"]
+
+
+#r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+history_path = "C:/Users/rgeyzer/Downloads/"
+r= CSV.read(string(history_path , "9-12.2020.txt"), DataFrame)
+h = DataFrame( Date = r[:,2], Price = r[:,8] , NewCandle = 0  )
+r= CSV.read(string(history_path , "1-4.2021.txt"), DataFrame)
+a = DataFrame( Date = r[:,2], Price = r[:,8] , NewCandle = 0 )
+r= CSV.read(string(history_path , "5-8.2021.txt"), DataFrame)
+b = DataFrame( Date = r[:,2], Price = r[:,8] , NewCandle = 0 )
+
+
+dropmissing!(h)
+dropmissing!(a)
+dropmissing!(b)
+
+append!(h,a)
+append!(h,b)
+
+
+
+for i in 1:nrow(h)
+    if h[i,1][end-1:end]=="00"
+        h[i,3]=1
+    end
+end
+
+tf1 = DataFrame(Date = "" , Hour = "" , Minute = "" , Open = 0.0, High = 0.0, Low = 0.0, Close = 0.0 )
+
+#=
+function FillHit1( i , j)
+    pips = 1
+    tf1.High[i+j] > tf1.Open[i] + pips ? uptest = true : uptest = false
+    tf1.Low[i+j] < tf1.Open[i] - pips ? lowtest = true : lowtest = false
+    if uptest && lowtest
+        println(i)
+        return
+    end
+    if uptest
+        return
+    end
+    if lowtest
+        return
+    end
+    FillHit1( i , j+1)
+end
+=#
+
+function FillHit10( i , j)
+    pips = 10
+    tf1.High[i+j] > tf1.Open[i] + pips ? uptest = true : uptest = false
+    tf1.Low[i+j] < tf1.Open[i] - pips ? lowtest = true : lowtest = false
+    if uptest && lowtest
+        tf1.Hit10First[i] = -1
+        return
+    end
+    if uptest
+        tf1.Hit10Bars[i] = 1
+        tf1.Hit10First[i] = j
+        return
+    end
+    if lowtest
+        tf1.Hit10Bars[i] = -1
+        tf1.Hit10First[i] = j
+        return
+    end
+    FillHit10( i , j+1)
+end
+
+function FillHit20( i , j)
+    pips = 20
+    tf1.High[i+j] > tf1.Open[i] + pips ? uptest = true : uptest = false
+    tf1.Low[i+j] < tf1.Open[i] - pips ? lowtest = true : lowtest = false
+    if uptest && lowtest
+        tf1.Hit20First[i] = -1
+        return
+    end
+    if uptest
+        tf1.Hit20Bars[i] = 1
+        tf1.Hit20First[i] = j
+        return
+    end
+    if lowtest
+        tf1.Hit20Bars[i] = -1
+        tf1.Hit20First[i] = j
+        return
+    end
+    FillHit20( i , j+1)
+end
+
+function FillHit50( i , j)
+    pips = 50
+    tf1.High[i+j] > tf1.Open[i] + pips ? uptest = true : uptest = false
+    tf1.Low[i+j] < tf1.Open[i] - pips ? lowtest = true : lowtest = false
+    if uptest && lowtest
+        tf1.Hit50First[i] = -1
+        return
+    end
+    if uptest
+        tf1.Hit50Bars[i] = 1
+        tf1.Hit50First[i] = j
+        return
+    end
+    if lowtest
+        tf1.Hit50Bars[i] = -1
+        tf1.Hit50First[i] = j
+        return
+    end
+    FillHit50( i , j+1)
+end
+
+function FillHit100( i , j)
+    pips = 100
+    tf1.High[i+j] > tf1.Open[i] + pips ? uptest = true : uptest = false
+    tf1.Low[i+j] < tf1.Open[i] - pips ? lowtest = true : lowtest = false
+    if uptest && lowtest
+        tf1.Hit100First[i] = -1
+        return
+    end
+    if uptest
+        tf1.Hit100Bars[i] = 1
+        tf1.Hit100First[i] = j
+        return
+    end
+    if lowtest
+        tf1.Hit100Bars[i] = -1
+        tf1.Hit100First[i] = j
+        return
+    end
+    FillHit100( i , j+1)
+end
+
+function FillHit200( i , j)
+    pips = 200
+    tf1.High[i+j] > tf1.Open[i] + pips ? uptest = true : uptest = false
+    tf1.Low[i+j] < tf1.Open[i] - pips ? lowtest = true : lowtest = false
+    if uptest && lowtest
+        tf1.Hit200First[i] = -1
+        return
+    end
+    if uptest
+        tf1.Hit200Bars[i] = 1
+        tf1.Hit200First[i] = j
+        return
+    end
+    if lowtest
+        tf1.Hit200Bars[i] = -1
+        tf1.Hit200First[i] = j
+        return
+    end
+    FillHit200( i , j+1)
+end
+
+function PopulateRSI()
+    o = 8/9
+    n = 1/9
+
+    rsi_df = DataFrame( Index = 1:nrow(tf1)  , U = 0.0 ,D = 0.0 ,AvgU = 0.0 ,AvgD = 0.0 , RS = 0.0 )
+    for i in 2:nrow(tf1) # first loop populate close and 1 cell calculations
+        if tf1[i,7] > tf1[i-1,7]
+            rsi_df.U[i] = tf1[i,7] - tf1[i-1,7]
+        else
+            rsi_df.D[i] = tf1[i-1,7] - tf1[i,7]
+        end
+    end
+    i=10
+    rsi_df.AvgU[i] = mean(rsi_df.U[2:10])
+    rsi_df.AvgD[i] = mean(rsi_df.D[2:10])
+    rsi_df.RS[i] = rsi_df.AvgU[i] / rsi_df.AvgD[i]
+    tf1.RSI[i+1] = Int(round(100 - 100/(1+rsi_df.RS[i])))
+
+    for i in 11:nrow(tf1)-1 # U and D
+        rsi_df.AvgU[i] = n*rsi_df.U[i] + o*rsi_df.AvgU[i-1]
+        rsi_df.AvgD[i] = n*rsi_df.D[i] + o*rsi_df.AvgD[i-1]
+        rsi_df.RS[i] = rsi_df.AvgU[i] / rsi_df.AvgD[i]
+        tf1.RSI[i+1] = Int(round(100 - 100/(1+rsi_df.RS[i])))
+    end
+end
+
+
+
+
+for i in 100:nrow(h)
+    if(h.NewCandle[i])==1
+        current_candle=i
+        j=i-1
+        new_loop = true
+        while new_loop
+            if h.NewCandle[j] ==1
+                previous_candle = j
+                new_loop = false
+            end
+            j=j-1
+        end
+        open = h.Price[j]
+        close = h.Price[i-1]
+        high=maximum(h.Price[j:i-1])
+        low=minimum(h.Price[j:i-1])
+        date_length = findfirst(isequal(' '), h.Date[i])
+        hour_length = findfirst(isequal(':'), h.Date[i])
+        date = h.Date[i][1:date_length]
+        hour = h.Date[i][hour_length-2: hour_length-1]
+        minute = h.Date[i][hour_length+1: hour_length+2]
+        ar1 = [date , hour , minute , open , high , low , close]
+        push!(tf1 , ar1)
+    end
+end
+
+
+
+
+insertcols!(tf1, :RSI=>0.0 ,:FirstPointValue => 0.0 , :SecondPointValue => 0.0 , :ThirdPointValue => 0.0 , :IntegratedScoreShort=>0.0 , :IntegratedScoreMid => 0.0 , :IntegratedScoreLong => 0.0 ,
+ :Hit10First => 0, :Hit10Bars => 0.0 , :Hit20First => 0, :Hit20Bars => 0.0, :Hit50First => 0, :Hit50Bars=> 0.0 , :Hit100First=> 0 , :Hit100Bars=> 0.0 , :Hit200First=> 0 , :Hit200Bars=> 0.0)
+
+
+PopulateRSI()
+
+
+    for i in 1:nrow(tf1)-2000
+        tf1.FirstPointValue[i] = round((tf1[i+10 , 4]-tf1[i,4]); digits = 1) # 10 bars
+        tf1.SecondPointValue[i] = round((tf1[i+30 , 4]-tf1[i,4]); digits = 1) # 30 bars
+        tf1.ThirdPointValue[i] = round((tf1[i+150 , 4]-tf1[i,4]); digits = 1) # 150 bras
+
+        TempMax = maximum(tf1[i:i+9 , 5])-tf1[i,4]
+        TempMin = tf1[i,4]-minimum(tf1[i:i+1 , 6])
+        TempMax2 = maximum(tf1[i:i+4 , 5])-tf1[i,4]
+        TempMin2 = tf1[i,4] - minimum(tf1[i:i+4 , 6])
+        TempMax3 = maximum(tf1[i:i+14 , 5])-tf1[i,4]
+        TempMin3 = tf1[i,4]-minimum(tf1[i:i+14 , 6])
+
+        tf1.IntegratedScoreShort[i] = 0.25 * TempMax + 0.25 * TempMin + 0.5 * tf1.FirstPointValue[i]
+        tf1.IntegratedScoreMid[i] =    0.25 * TempMax2 + 0.25 * TempMin2 + 0.5 * tf1.SecondPointValue[i]
+        tf1.IntegratedScoreLong[i] =    0.25 * TempMax3 + 0.25 * TempMin3 + 0.5 * tf1.ThirdPointValue[i]
+
+        FillHit10( i , 1)
+
+        FillHit20( i , 1)
+        FillHit50( i , 1)
+        FillHit100( i , 1)
+        FillHit200( i , 1)
+
+    end
+
+
+    println(describe(tf1))
+
+
+    println(tf1[1:20 , :])
+
+
+
+
+
+
+
+CSV.write(string(history_path , "NASDAQ file.csv") , tf1[:,:])
+
+
+#=
+
+println((h[100000:100000+100 , :]))
+length(h[100000+100,1])
+
+
+println(h[70,1][16:17])
+
+findfirst(isequal(' '), h[100000+100,1])
+
+h[71,1]>h[70,1]
+println(h[70,1][16:17])
+length(h[71,1])
+h[71,1][16:17]=="00"
+
+=#

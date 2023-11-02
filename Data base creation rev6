@@ -1,0 +1,1077 @@
+
+# add daily volume indicators: MSi , MSID , and maybe breakout or larger % than last x
+# add function to calculate MFI and populate all of them - same as RSI but with volume , need to check calculation with MT4 & MT5 chart
+
+# volume only added for D
+# i and hour will be added last after data base done
+
+begin # using block
+    using CSV
+    using DataFrames
+    using Statistics
+    using Dates
+end
+
+println("Start -> " , now())
+
+history_path = "C:/Users/rgeyzer/AppData/Roaming/MetaQuotes/Terminal/D0E8209F77C8CF37AD8BF550E51FF075/MQL5/Files/History (MetaQuotes-Demo)/"
+user_input_pair = "USDJPY"
+
+begin # define constants
+    #@enum TimeFrame M1=5 M5=10 M15=15 H1=20 D1=25
+    @enum Color Red=-1 Green=1 NoColor =0
+    #@enum Signal Sell=-1 Buy=1
+    marbuzo_ratio=4
+    history_reduction = 200
+
+    if isnothing(findfirst("JPY" , user_input_pair))
+        pip = 0.0001
+    else
+        pip = 0.01
+    end
+    println("pip value is: " , pip)
+end
+
+begin # base candles functions
+    function CandleColor(index::Int)
+        if h[index,3] > h[index,6]
+            return Red
+        end
+        if h[index,3] < h[index,6]
+            return Green
+        end
+        NoColor
+    end
+
+    function ThreeCandlePattern(index::Int)
+        tempStr = ""
+        if (CandleColor(index - 2) == Green)
+            tempStr = string(tempStr , 'G')
+        elseif (CandleColor(index - 2) == Red)
+            tempStr = string(tempStr , 'R')
+        else
+            tempStr = string(tempStr , 'N')
+        end
+
+        if (CandleColor(index - 1) == Green)
+            tempStr = string(tempStr , 'G')
+        elseif (CandleColor(index - 1) == Red)
+            tempStr = string(tempStr , 'R')
+        else
+            tempStr = string(tempStr , 'N')
+        end
+
+        if (CandleColor(index ) == Green)
+            tempStr = string(tempStr , 'G')
+        elseif (CandleColor(index ) == Red)
+            tempStr = string(tempStr , 'R')
+        else
+            tempStr = string(tempStr , 'N')
+        end
+        return tempStr
+    end
+
+    function BodySize(index::Int)
+        bsize = abs(h[index,3] - h[index,6])
+        bsize = round(bsize/pip; digits = 1)
+    end
+
+    function CandleSize(index::Int )
+        csize = abs(h[index,4] - h[index,5])
+        csize = round(csize/pip; digits = 1)
+    end
+
+    function UpperWikSize(index::Int )
+        if CandleColor(index)==Red
+            return (h[index,4]-h[index,3])/pip
+        end
+        return (h[index,4]-h[index,6])/pip
+    end
+
+    function LowerWikSize(index::Int )
+        if CandleColor(index)==Red
+            return (h[index,6]-h[index,5])/pip
+        end
+        return (h[index,3]-h[index,5])/pip
+    end
+
+    function UpperWikRatio(index::Int)
+        if UpperWikSize(index)==0
+            return 1000
+        end
+        return BodySize(index) / UpperWikSize(index)
+    end
+
+    function LowerWikRatio(index::Int )
+        if LowerWikSize(index)==0
+            return 1000
+        end
+        return BodySize(index) / LowerWikSize(index)
+    end
+
+    function WikRatio(index::Int )
+        if LowerWikSize(index)==0 && UpperWikSize(index)==0 # no wiks
+            return 1000
+        end
+        return BodySize(index) / (UpperWikSize(index)+LowerWikSize(index))
+    end
+
+    function IsMarbuzo(index::Int)
+        if CandleColor(index)== NoColor
+            return false
+        end
+        return max(UpperWikRatio(index),LowerWikRatio(index))>=4 && WikRatio(index)>2.5
+    end
+
+    function IsDoji(index::Int )
+        if UpperWikSize(index)>0 && LowerWikSize(index)>0 && 0.25<UpperWikSize(index)/LowerWikSize(index)<4
+            return WikRatio(index)<0.25
+        end
+        return false
+    end
+
+    function IsHammer(index::Int )
+        if WikRatio(index)>0.25
+            return false
+        end
+        if UpperWikSize(index) ==0
+            return true
+        end
+        if LowerWikSize(index)/UpperWikSize(index) > 2.5
+            return true
+        end
+        return false
+    end
+
+    function IsInvHammer(index::Int )
+        if WikRatio(index)>0.25
+            return false
+        end
+        if LowerWikSize(index) ==0
+            return true
+        end
+        if UpperWikSize(index)/LowerWikSize(index) > 2.5
+            return true
+        end
+        return false
+    end
+
+    function IsMorningStar(index::Int)
+        if IsDoji(index-1) && CandleColor(index) != CandleColor(index-2) && IsMarbuzo(index-2)&& IsMarbuzo(index) && BodySize(index-2)>=2*BodySize(index-1)&& BodySize(index)>=2*BodySize(index-1)
+            return true
+        end
+        return false
+    end
+
+    function HHHCLLLC(index::Int)
+        lastc = index-1
+        if CandleColor(index) == Green
+            return h[index,4]>h[lastc,4] && h[index,6]>h[lastc,6]
+        end
+        if CandleColor(index) == Red
+            return h[index,5]<h[lastc,5] && h[index,6]<h[lastc,6]
+        end
+        return false
+    end
+
+    function Engulfing(index::Int)
+        lastc = index-1
+        if CandleColor(lastc)==CandleColor(index)
+            return false
+        end
+        if CandleColor(index) == Green
+            return h[index,3]<=h[lastc,6] && h[index,6]>=h[lastc,3]
+        end
+        if CandleColor(index) == Red
+            return h[index,3]>=h[lastc,6] && h[index,6]<=h[lastc,3]
+        end
+        # no color:
+        return false
+    end
+
+    function OutsideBar(index::Int )
+        lastc = index-1
+        return h[index,4]>h[lastc,4] && h[index,5]<h[lastc,5]
+    end
+
+    function InsideBar(index::Int )
+        lastc = index-1
+        return h[index,4]<h[lastc,4] && h[index,5]>h[lastc,5]
+    end
+end
+
+begin # multiple candlles comparison functions
+    function LastInsideBar(index::Int)
+        updated_last_candle = index-1
+        for i in 1:100
+            if InsideBar(updated_last_candle)
+                return i
+            end
+            updated_last_candle = updated_last_candle-1
+        end
+        return 100
+    end
+
+    function BreakoutFromLastXCandles(index::Int)
+        if CandleColor(index)==Green
+            for i in 1:100
+                if h[index,6]<maximum(h[index-i:index-1 ,4])
+                    return i-1
+                end
+            end
+            return 100
+        end
+
+        if CandleColor(index)==Red
+            for i in 1:100
+                if h[index,6]>minimum(h[index-i:index-1 ,5])
+                    return i-1
+                end
+            end
+            return 100
+        end
+        return -1 #should only happen for no color
+    end
+
+    function CountBiggerCandleThanX(index::Int ,)
+        size = CandleSize(index)
+        updated_last_candle = index-1
+        i=0
+        while i<99
+            if size<=CandleSize(updated_last_candle)
+                return i
+            end
+            i = i+1
+            updated_last_candle = updated_last_candle-1
+        end
+        return 100
+    end
+
+    function CountBiggerBodyThanX(index::Int )
+        size = BodySize(index)
+        updated_last_candle = index-1
+        i=0
+        while i<99
+            if size<=BodySize(updated_last_candle )
+                return i
+            end
+            i = i+1
+            updated_last_candle = updated_last_candle-1
+        end
+        return 100
+    end
+
+    function CountMarabuzos(index::Int)
+        if IsMarbuzo(index)
+            if CandleColor(index)==CandleColor(index-1)
+                return 1+CountMarabuzos(index-1)
+            end
+            return 1
+        end
+        return 0
+    end
+end
+
+begin # Indicators functions
+    function ATR(index::Int , ATR_length=14::Int)
+        tr =  []
+        for i in 1:ATR_length
+            push!(tr , max(h[index-i , 4] - h[index-i , 5] ,max(h[index-i , 4]-h[index-i , 6] , h[index-i-1 , 6] -h[index-i , 5] )))
+        end
+        atr = mean(tr[1:end])
+        return Int(round(atr/pip))
+    end
+
+    function PopulateRSI()
+        o = 13/14
+        n = 1/14
+
+        rsi_df = DataFrame( Index = 1:nrow(h)  , U = 0.0 ,D = 0.0 ,AvgU = 0.0 ,AvgD = 0.0 , RS = 0.0 )
+        for i in 2:nrow(h) # first loop populate close and 1 cell calculations
+            if h[i,6] > h[i-1,6]
+                rsi_df.U[i] = h[i,6] - h[i-1,6]
+            else
+                rsi_df.D[i] = h[i-1,6] - h[i,6]
+            end
+        end
+        i=15
+        rsi_df.AvgU[i] = mean(rsi_df.U[2:15])
+        rsi_df.AvgD[i] = mean(rsi_df.D[2:15])
+        rsi_df.RS[i] = rsi_df.AvgU[i] / rsi_df.AvgD[i]
+        h[i+1,40] = Int(round(100 - 100/(1+rsi_df.RS[i])))
+
+        for i in 16:nrow(h)-1 # U and D
+            rsi_df.AvgU[i] = n*rsi_df.U[i] + o*rsi_df.AvgU[i-1]
+            rsi_df.AvgD[i] = n*rsi_df.D[i] + o*rsi_df.AvgD[i-1]
+            rsi_df.RS[i] = rsi_df.AvgU[i] / rsi_df.AvgD[i]
+            h[i+1,40] = Int(round(100 - 100/(1+rsi_df.RS[i])))
+        end
+    end
+end
+
+begin # populate functions
+    function PopulateM1()
+        user_input_tf = "M1"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "Open" , "High" , "Low"  , "Close" , "Volume"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  Open = r[:,3], High = r[:,4], Low = r[:,5], Close = r[:,6],
+                V3 = 0.0, V10 = 0.0, V20 = 0.0, MaxV20 = 0.0, MinV20 = 0.0, V50 = 0.0, MaxV50 = 0.0, MinV50 = 0.0,
+                Color = NoColor ,ThrClr = "" , ChngV = 0.0 , ChngP = 0.0 , BSize = 0.0 , CSize = 0.0 , Doji = false , Ham = false , InvHam = false , MornStar = false ,
+                HHLL = false , Engulf = false , Out = false , In = false, LastIn = 0 , BreakOutFrom = 0 , BodyBiggerThan = 0 , CandleBiggerThan = 0 , CountMarb = 0 ,
+                SMA20V = 0.0 , SMA20S = 0.0 , SMA20Di = 0 , SMA50V = 0.0 , SMAsDi = 0.0 , ATR = 0 , RSI = 0, RSIS = 0)
+        #=
+        j=1
+        for i in names(h)
+            println(j , " -> " , i)
+            j +=1
+        end
+        =#
+                PopulateRSI()
+                println("populate RSI done-> " , now())
+                h[200, 35] = mean(h[180:199 , 6]) #SMA
+                h[200, 38] = mean(h[150:199 , 6]) #SMA
+                for i in 101:nrow(h) - history_reduction
+                    j=7
+                    h[i,j] = Int(round((h[i+3,6]-h[i,6])/pip)) #V3
+                    j+=1
+                    h[i,j] = Int(round((h[i+10,6]-h[i,6])/pip)) #V10
+                    j+=1
+                    h[i,j] = Int(round((h[i+20,6]-h[i,6])/pip)) #V20
+                    j+=1
+                    h[i,j] = Int(round((maximum(h[i:i+20 , 4])-h[i,6])/pip)) #MaxV20
+                    j+=1
+                    h[i,j] = Int(round((minimum(h[i:i+20 , 5])-h[i,6])/pip)) #MinV20
+                    j+=1
+                    h[i,j] = Int(round((h[i+50 , 6]-h[i,6])/pip)) #V50
+                    j+=1
+                    h[i,j] = Int(round((maximum(h[i:i+50 , 4])-h[i,6])/pip)) #MaxV20K
+                    j+=1
+                    h[i,j] = Int(round((minimum(h[i:i+50 , 5])-h[i,6])/pip)) #MinV20K
+                    j+=1
+
+                    h[i+1,j] = CandleColor(i) #Color
+                    j+=1
+                    h[i+1,j] = ThreeCandlePattern(i) #ThrClr
+                    j+=1
+                    h[i+1,j] = round((h[i,6] - h[i,3])/pip; digits = 1) #ChngV
+                    j+=1
+                    h[i+1,j] = round(100*(h[i,6] /  h[i,3] - 1); digits = 1) #ChngP
+                    j+=1
+                    h[i+1,j] = BodySize(i) #BSize
+                    j+=1
+                    h[i+1,j] = CandleSize(i) #CSize
+                    j+=1
+                    h[i+1,j] = IsDoji(i) #Doji
+                    j+=1
+                    h[i+1,j] = IsHammer(i) #Ham
+                    j+=1
+                    h[i+1,j] = IsInvHammer(i) #InvHam
+                    j+=1
+                    h[i+1,j] = IsMorningStar(i) #MornStar
+                    j+=1
+                    h[i+1,j] = HHHCLLLC(i) #HHLL
+                    j+=1
+                    h[i+1,j] = Engulfing(i) #Engulf
+                    j+=1
+                    h[i+1,j] = OutsideBar(i) #Out
+                    j+=1
+                    h[i+1,j] = InsideBar(i) #In
+                    j+=1
+                    h[i+1,j] = LastInsideBar(i) #LastIn
+                    j+=1
+                    h[i+1,j] = BreakoutFromLastXCandles(i) #BreakOutFrom
+                    j+=1
+                    h[i+1,j] = CountBiggerBodyThanX(i) #BodyBiggerThan
+                    j+=1
+                    h[i+1,j] = CountBiggerCandleThanX(i) #CandleBiggerThan
+                    j+=1
+                    h[i+1,j] = CountMarabuzos(i) #CountMarb
+                    j+=1
+                    h[i,j] = mean(h[i-20:i-1 , 6]) #SMA20V
+                    j+=1
+                    h[i,j] = round((h[i,j-1] - h[i-1,j-1])/pip; digits = 1) #SMA20S
+                    j+=1
+                    h[i,j] = Int(round((h[i-1,3] - h[i , j-2])/pip)) #SMA20Di
+                    j+=1
+                    h[i,j] =  mean(h[i-50:i-1 , 6]) #SMA50V
+                    j+=1
+                    h[i,j] = round((h[i+1,j-4] - h[i+1,j-1])/pip; digits = 1) #SMAsDi
+                    j+=1
+                    h[i+1,j] = ATR(i) #ATR
+                    j=j+2
+                    h[i+1,j] = h[i+1,j-1] - h[i,j-1] #RSIS#
+                end
+        insertcols!(h, 3, :Hour => 0)
+        for i in 201:nrow(h)
+            h.Hour[i] = hour(h.Time[i])
+        end
+        return h
+    end
+
+    function PopulateM5()
+        user_input_tf = "M5"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "Open5" , "High5" , "Low5"  , "Close5" , "Volume5"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  Open5 = r[:,3], High5 = r[:,4], Low5 = r[:,5], Close5 = r[:,6],
+            V35M = 0.0, V105M = 0.0, V205M = 0.0, MaxV205M = 0.0, MinV205M = 0.0,V505M = 0.0, MaxV505M = 0.0, MinV505M = 0.0,
+            Color5M = NoColor,ThrClr5M = "" ,ChngV5M = 0.0 , ChngP5M = 0.0 , BSize5M = 0.0 , CSize5M = 0.0 , Doji5M = false , Ham5M = false , InvHam5M = false , MornStar5M = false ,
+            HHLL5M = false , Engulf5M = false , Out5M = false , In5M = false, LastIn5M = 0 , BreakOutFrom5M = 0 , BodyBiggerThan5M = 0 , CandleBiggerThan5M = 0 , CountMarb5M = 0 ,
+            SMA20V5M = 0.0 , SMA20S5M = 0.0 , SMA20Di5M = 0 , SMA50V5M = 0.0 , SMAsDi5M = 0.0 , ATR5M = 0 , RSI5M = 0, RSIS5M = 0,
+        #1M stats on 5M candles
+            CountGreen5M1M = 0, CountRed5M1M = 0, MaxChngV5M1M = 0.0, MaxChngP5M1M = 0.0,MinChngV5M1M = 0.0, MinChngP5M1M = 0.0, MaxBSize5M1M = 0.0, MaxCSize5M1M = 0.0 ,
+            CountDoji5M1M = 0, CountHam5M1M = 0, CountInvHam5M1M = 0, CountMornStar5M1M = 0, CountHHLL5M1M = 0 , CountEngulf5M1M = 0, CountOut5M1M = 0 , CountIn5M1M = 0 ,
+            MaxLastIn5M1M = 0, MaxBreakOutFrom5M1M = 0, MaxBodyBiggerThan5M1M = 0, MaxCandleBiggerThan5M1M = 0, MaxCountMarb5M1M = 0, MaxRSIS5M1M = 0, MinRSIS5M1M = 0)
+        #=
+        j=1
+        for i in names(h)
+            println(j , " -> " , i)
+            j +=1
+        end
+        =#
+                PopulateRSI()
+                println("populate RSI5M done-> " , now())
+                h[200, 35] = mean(h[180:199 , 6]) #SMA
+                h[200, 38] = mean(h[150:199 , 6]) #SMA
+                for i in 201:nrow(h) - history_reduction
+                    j=7
+                    h[i,j] = Int(round((h[i+3,6]-h[i,6])/pip)) #V3
+                    j+=1
+                    h[i,j] = Int(round((h[i+10,6]-h[i,6])/pip)) #V10
+                    j+=1
+                    h[i,j] = Int(round((h[i+20,6]-h[i,6])/pip)) #V20
+                    j+=1
+                    h[i,j] = Int(round((maximum(h[i:i+20 , 4])-h[i,6])/pip)) #MaxV20
+                    j+=1
+                    h[i,j] = Int(round((minimum(h[i:i+20 , 5])-h[i,6])/pip)) #MinV20
+                    j+=1
+                    h[i,j] = Int(round((h[i+50 , 6]-h[i,6])/pip)) #V50
+                    j+=1
+                    h[i,j] = Int(round((maximum(h[i:i+50 , 4])-h[i,6])/pip)) #MaxV20K
+                    j+=1
+                    h[i,j] = Int(round((minimum(h[i:i+50 , 5])-h[i,6])/pip)) #MinV20K
+                    j+=1
+
+                    h[i+1,j] = CandleColor(i) #Color
+                    j+=1
+                    h[i+1,j] = ThreeCandlePattern(i) #ThrClr
+                    j+=1
+                    h[i+1,j] = round((h[i,6] - h[i,3])/pip; digits = 1) #ChngV
+                    j+=1
+                    h[i+1,j] = round(100*(h[i,6] / h[i,3] - 1); digits = 1) #ChngP
+                    j+=1
+                    h[i+1,j] = BodySize(i) #BSize
+                    j+=1
+                    h[i+1,j] = CandleSize(i) #CSize
+                    j+=1
+                    h[i+1,j] = IsDoji(i) #Doji
+                    j+=1
+                    h[i+1,j] = IsHammer(i) #Ham
+                    j+=1
+                    h[i+1,j] = IsInvHammer(i) #InvHam
+                    j+=1
+                    h[i+1,j] = IsMorningStar(i) #MornStar
+                    j+=1
+                    h[i+1,j] = HHHCLLLC(i) #HHLL
+                    j+=1
+                    h[i+1,j] = Engulfing(i) #Engulf
+                    j+=1
+                    h[i+1,j] = OutsideBar(i) #Out
+                    j+=1
+                    h[i+1,j] = InsideBar(i) #In
+                    j+=1
+                    h[i+1,j] = LastInsideBar(i) #LastIn
+                    j+=1
+                    h[i+1,j] = BreakoutFromLastXCandles(i) #BreakOutFrom
+                    j+=1
+                    h[i+1,j] = CountBiggerBodyThanX(i) #BodyBiggerThan
+                    j+=1
+                    h[i+1,j] = CountBiggerCandleThanX(i) #CandleBiggerThan
+                    j+=1
+                    h[i+1,j] = CountMarabuzos(i) #CountMarb
+                    j+=1
+                    h[i,j] = mean(h[i-20:i-1 , 6]) #SMA20V
+                    j+=1
+                    h[i,j] = round((h[i,j-1] - h[i-1,j-1])/pip; digits = 1) #SMA20S
+                    j+=1
+                    h[i,j] = Int(round((h[i-1,3] - h[i , j-2])/pip)) #SMA20Di
+                    j+=1
+                    h[i,j] =  mean(h[i-50:i-1 , 6]) #SMA50V
+                    j+=1
+                    h[i,j] = round((h[i+1,j-4] - h[i+1,j-1])/pip; digits = 1) #SMAsDi
+                    j+=1
+                    h[i+1,j] = ATR(i) #ATR
+                    j=j+2
+                    h[i+1,j] = h[i+1,j-1] - h[i,j-1] #RSIS#
+                end
+        return h
+    end
+
+    function PopulateM15()
+        user_input_tf = "M15"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "Open15" , "High15" , "Low15"  , "Close15" , "Volume15"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  Open15 = r[:,3], High15 = r[:,4], Low15 = r[:,5], Close15 = r[:,6],
+        V315M = 0.0, V1015M = 0.0, V2015M = 0.0, MaxV2015M = 0.0, MinV2015M = 0.0, V5015M = 0.0, MaxV5015M = 0.0, MinV5015M = 0.0,
+        Color15M= NoColor,ThrClr15M = "" ,ChngV15M = 0.0, ChngP15M = 0.0, BSize15M = 0.0, CSize15M = 0.0, Doji15M = false, Ham15M = false, InvHam15M = false, MornStar15M = false,
+        HHLL15M = false, Engulf15M = false, Out15M = false , In15M = false, LastIn15M = 0, BreakOutFrom15M = 0, BodyBiggerThan15M = 0, CandleBiggerThan15M = 0, CountMarb15M = 0,
+        SMA20V15M = 0.0 , SMA20S15M = 0.0 , SMA20Di15M = 0 , SMA50V15M = 0.0 , SMAsDi15M = 0.0 , ATR15M = 0 , RSI15M = 0, RSIS15M = 0,
+        #5M stats on 15M candles
+        CountGreen15M5M = 0, CountRed15M5M = 0, MaxChngV15M5M = 0.0, MaxChngP15M5M = 0.0,MinChngV15M5M = 0.0, MinChngP15M5M = 0.0, MaxBSize15M5M = 0.0, MaxCSize15M5M = 0.0 ,
+        CountDoji15M5M = 0, CountHam15M5M = 0, CountInvHam15M5M = 0, CountMornStar15M5M = 0, CountHHLL15M5M = 0 , CountEngulf15M5M = 0, CountOut15M5M = 0 , CountIn15M5M = 0 ,
+        MaxLastIn15M5M = 0, MaxBreakOutFrom15M5M = 0, MaxBodyBiggerThan15M5M = 0, MaxCandleBiggerThan15M5M = 0, MaxCountMarb15M5M = 0, MaxRSIS15M5M = 0, MinRSIS15M5M = 0,
+        FirstPointValue = 0.0 , FirstPointScore = 0.0,SecondPointValue = 0.0 , SecondPointScore = 0.0,ThirdPointValue = 0.0 , ThirdsPointScore = 0.0)
+
+        #=
+        j=1
+        for i in names(h)
+            println(j , " -> " , i)
+            j +=1
+        end
+        =#
+                PopulateRSI()
+                println("populate RSI15M done-> " , now())
+                h[200, 35] = mean(h[180:199 , 6]) #SMA
+                h[200, 38] = mean(h[150:199 , 6]) #SMA
+                for i in 201:nrow(h) - history_reduction
+                    j=7
+                    #h[i,j] = Int(round((h[i+3,6]-h[i,6])/pip)) #V3
+                    j+=1
+                    #h[i,j] = Int(round((h[i+10,6]-h[i,6])/pip)) #V10
+                    j+=1
+                    #h[i,j] = Int(round((h[i+20,6]-h[i,6])/pip)) #V20
+                    j+=1
+                    #h[i,j] = Int(round((maximum(h[i:i+20 , 4])-h[i,6])/pip)) #MaxV20
+                    j+=1
+                    #h[i,j] = Int(round((minimum(h[i:i+20 , 5])-h[i,6])/pip)) #MinV20
+                    j+=1
+                    #h[i,j] = Int(round((h[i+50 , 6]-h[i,6])/pip)) #V50
+                    j+=1
+                #    h[i,j] = Int(round((maximum(h[i:i+50 , 4])-h[i,6])/pip)) #MaxV20K
+                    j+=1
+                #    h[i,j] = Int(round((minimum(h[i:i+50 , 5])-h[i,6])/pip)) #MinV20K
+                    j+=1
+
+                    h[i+1,j] = CandleColor(i) #Color
+                    j+=1
+                    h[i+1,j] = ThreeCandlePattern(i) #ThrClr
+                    j+=1
+                    h[i+1,j] = round((h[i,6] - h[i,3])/pip; digits = 1) #ChngV
+                    j+=1
+                    h[i+1,j] = round(100*(h[i,6] / h[i,3] - 1); digits = 1) #ChngP
+                    j+=1
+                    h[i+1,j] = BodySize(i) #BSize
+                    j+=1
+                    h[i+1,j] = CandleSize(i) #CSize
+                    j+=1
+                    h[i+1,j] = IsDoji(i) #Doji
+                    j+=1
+                    h[i+1,j] = IsHammer(i) #Ham
+                    j+=1
+                    h[i+1,j] = IsInvHammer(i) #InvHam
+                    j+=1
+                    h[i+1,j] = IsMorningStar(i) #MornStar
+                    j+=1
+                    h[i+1,j] = HHHCLLLC(i) #HHLL
+                    j+=1
+                    h[i+1,j] = Engulfing(i) #Engulf
+                    j+=1
+                    h[i+1,j] = OutsideBar(i) #Out
+                    j+=1
+                    h[i+1,j] = InsideBar(i) #In
+                    j+=1
+                    h[i+1,j] = LastInsideBar(i) #LastIn
+                    j+=1
+                    h[i+1,j] = BreakoutFromLastXCandles(i) #BreakOutFrom
+                    j+=1
+                    h[i+1,j] = CountBiggerBodyThanX(i) #BodyBiggerThan
+                    j+=1
+                    h[i+1,j] = CountBiggerCandleThanX(i) #CandleBiggerThan
+                    j+=1
+                    h[i+1,j] = CountMarabuzos(i) #CountMarb
+                    j+=1
+                    h[i,j] = mean(h[i-20:i-1 , 6]) #SMA20V
+                    j+=1
+                    h[i,j] = round((h[i,j-1] - h[i-1,j-1])/pip; digits = 1) #SMA20S
+                    j+=1
+                    h[i,j] = Int(round((h[i-1,3] - h[i , j-2])/pip)) #SMA20Di
+                    j+=1
+                    h[i,j] =  mean(h[i-50:i-1 , 6]) #SMA50V
+                    j+=1
+                    h[i,j] = round((h[i,j-4] - h[i,j-1])/pip; digits = 1) #SMAsDi
+                    j+=1
+                    h[i+1,j] = ATR(i) #ATR
+                    j=j+2
+                    h[i+1,j] = h[i+1,j-1] - h[i,j-1] #RSIS#
+
+                    h.FirstPointValue[i] = round((h[i+6 , 3]-h[i,3])/pip; digits = 1)
+                    h.SecondPointValue[i] = round((h[i+32 , 3]-h[i,3])/pip; digits = 1)
+                    h.ThirdPointValue[i] = round((h[i+150 , 3]-h[i,3])/pip; digits = 1)
+                    TempMax = maximum(h[i:i+5 , 4])-h[i,3]
+                    TempMin = h[i,3]-minimum(h[i:i+5 , 5])
+                    if TempMax>0 && TempMin==0
+                        h.FirstPointScore[i] = 1000
+                    elseif TempMax==0 && TempMin>0
+                        h.FirstPointScore[i] = -1000
+                    elseif TempMax>=TempMin
+                        h.FirstPointScore[i] = round(TempMax/TempMin; digits = 1)
+                    else
+                        h.FirstPointScore[i] = -round(TempMin / TempMax; digits = 1)
+                    end
+                    TempMax = maximum(h[i:i+31 , 4])-h[i,3]
+                    TempMin = h[i,3] - minimum(h[i:i+31 , 5])
+                    if TempMax>0 && TempMin==0
+                        h.SecondPointScore[i] = 1000
+                    elseif TempMax==0 && TempMin>0
+                        h.SecondPointScore[i] = -1000
+                    elseif TempMax>=TempMin
+                        h.SecondPointScore[i] = round(TempMax/TempMin; digits = 1)
+                    else
+                        h.SecondPointScore[i] = -round(TempMin / TempMax; digits = 1)
+                    end
+
+                    TempMax = maximum(h[i:i+149 , 4])-h[i,3]
+                    TempMin = h[i,3] - minimum(h[i:i+149 , 5])
+                    if TempMax>0 && TempMin==0
+                        h.ThirdsPointScore[i] = 1000
+                    elseif TempMax==0 && TempMin>0
+                        h.ThirdsPointScore[i] = -1000
+                    elseif TempMax>=TempMin
+                        h.ThirdsPointScore[i] = round(TempMax/TempMin; digits = 1)
+                    else
+                        h.ThirdsPointScore[i] = -round(TempMin / TempMax; digits = 1)
+                    end
+                end
+        return h
+    end
+
+    function PopulateH()
+        user_input_tf = "H1"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "OpenH" , "HighH" , "LowH"  , "CloseH" , "VolumeH"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  OpenH = r[:,3], HighH = r[:,4], LowH = r[:,5], CloseH = r[:,6],
+                        V3H = 0.0, V10H = 0.0, V20H = 0.0, MaxV20H = 0.0, MinV20H = 0.0, V50H = 0.0, MaxV50H = 0.0, MinV50H = 0.0,
+                        ColorH = NoColor,ThrClrH = "" ,ChngVH = 0.0 , ChngPH = 0.0 , BSizeH = 0.0 , CSizeH = 0.0 , DojiH = false , HamH = false , InvHamH = false , MornStarH = false ,
+                        HHLLH = false , EngulfH = false , OutH = false , InH = false, LastInH = 0 ,BreakOutFromH = 0 , BodyBiggerThanH = 0 , CandleBiggerThanH = 0 , CountMarbH = 0 ,
+                        SMA20VH = 0.0 , SMA20SH = 0.0 , SMA20DiH = 0 , SMA50VH = 0.0 , SMAsDiH = 0.0 , ATRH = 0 , RSIH = 0,RSISH = 0,
+                     #15M stats on 1H candles
+                        CountGreenH15M = 0, CountRedH15M = 0, MaxChngVH15M = 0.0, MaxChngPH15M = 0.0, MinChngVH15M = 0.0, MinChngPH15M = 0.0, MaxBSizeH15M = 0.0, MaxCSizeH15M = 0.0 ,
+                        CountDojiH15M = 0, CountHamH15M = 0, CountInvHamH15M = 0, CountMornStarH15M = 0, CountHHLLH15M = 0 , CountEngulfH15M = 0, CountOutH15M = 0 , CountInH15M = 0 ,
+                         MaxLastInH15M = 0, MaxBreakOutFromH15M = 0, MaxBodyBiggerThanH15M = 0, MaxCandleBiggerThanH15M = 0, MaxCountMarbH15M = 0, MaxRSISH15M = 0, MinRSISH15M = 0)
+        #=
+        j=1
+        for i in names(h)
+            println(j , " -> " , i)
+            j +=1
+        end
+        =#
+                PopulateRSI()
+                println("populate RSIH done-> " , now())
+                h[200, 35] = mean(h[180:199 , 6]) #SMA
+                h[200, 38] = mean(h[150:199 , 6]) #SMA
+                for i in 201:nrow(h) - history_reduction
+                    j=7
+                    #h[i,j] = Int(round((h[i+3,6]-h[i,6])/pip)) #V3
+                    j+=1
+                    #h[i,j] = Int(round((h[i+10,6]-h[i,6])/pip)) #V10
+                    j+=1
+                    #h[i,j] = Int(round((h[i+20,6]-h[i,6])/pip)) #V20
+                    j+=1
+                #    h[i,j] = Int(round((maximum(h[i:i+20 , 4])-h[i,6])/pip)) #MaxV20
+                    j+=1
+                #    h[i,j] = Int(round((minimum(h[i:i+20 , 5])-h[i,6])/pip)) #MinV20
+                    j+=1
+                #    h[i,j] = Int(round((h[i+50 , 6]-h[i,6])/pip)) #V50
+                    j+=1
+                #    h[i,j] = Int(round((maximum(h[i:i+50 , 4])-h[i,6])/pip)) #MaxV20K
+                    j+=1
+                #    h[i,j] = Int(round((minimum(h[i:i+50 , 5])-h[i,6])/pip)) #MinV20K
+                    j+=1
+
+                    h[i+1,j] = CandleColor(i) #Color
+                    j+=1
+                    h[i+1,j] = ThreeCandlePattern(i) #ThrClr
+                    j+=1
+                    h[i+1,j] = round((h[i,6] - h[i,3])/pip; digits = 1) #ChngV
+                    j+=1
+                    h[i+1,j] = round(100*(h[i,6] / h[i,3] - 1); digits = 1) #ChngP
+                    j+=1
+                    h[i+1,j] = BodySize(i) #BSize
+                    j+=1
+                    h[i+1,j] = CandleSize(i) #CSize
+                    j+=1
+                    h[i+1,j] = IsDoji(i) #Doji
+                    j+=1
+                    h[i+1,j] = IsHammer(i) #Ham
+                    j+=1
+                    h[i+1,j] = IsInvHammer(i) #InvHam
+                    j+=1
+                    h[i+1,j] = IsMorningStar(i) #MornStar
+                    j+=1
+                    h[i+1,j] = HHHCLLLC(i) #HHLL
+                    j+=1
+                    h[i+1,j] = Engulfing(i) #Engulf
+                    j+=1
+                    h[i+1,j] = OutsideBar(i) #Out
+                    j+=1
+                    h[i+1,j] = InsideBar(i) #In
+                    j+=1
+                    h[i+1,j] = LastInsideBar(i) #LastIn
+                    j+=1
+                    h[i+1,j] = BreakoutFromLastXCandles(i) #BreakOutFrom
+                    j+=1
+                    h[i+1,j] = CountBiggerBodyThanX(i) #BodyBiggerThan
+                    j+=1
+                    h[i+1,j] = CountBiggerCandleThanX(i) #CandleBiggerThan
+                    j+=1
+                    h[i+1,j] = CountMarabuzos(i) #CountMarb
+                    j+=1
+                    h[i,j] = mean(h[i-20:i-1 , 6]) #SMA20V
+                    j+=1
+                    h[i,j] = round((h[i,j-1] - h[i-1,j-1])/pip; digits = 1) #SMA20S
+                    j+=1
+                    h[i,j] = Int(round((h[i-1,3] - h[i , j-2])/pip)) #SMA20Di
+                    j+=1
+                    h[i,j] =  mean(h[i-50:i-1 , 6]) #SMA50V
+                    j+=1
+                    h[i,j] = round((h[i+1,j-4] - h[i+1,j-1])/pip; digits = 1) #SMAsDi
+                    j+=1
+                    h[i+1,j] = ATR(i) #ATR
+                    j=j+2
+                    h[i+1,j] = h[i+1,j-1] - h[i,j-1] #RSIS#
+                end
+        return h
+    end
+
+    function PopulateD()
+        user_input_tf = "D1"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "OpenD" , "HighD" , "LowD"  , "CloseD" , "VolumeD"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  OpenD = r[:,3], HighD = r[:,4], LowD = r[:,5], CloseD = r[:,6],
+                        V3D = 0.0, V10D = 0.0, V20D = 0.0, MaxV20D = 0.0, MinV20D = 0.0, V50D = 0.0, MaxV50D = 0.0, MinV50D = 0.0,
+                        ColorD = NoColor,ThrClrD = "" ,ChngVD = 0.0 , ChngPD = 0.0 , BSizeD = 0.0 , CSizeD = 0.0 , DojiD = false , HamD = false , InvHamD = false , MornStarD = false ,
+                        HHLLD = false , EngulfD = false , OutD = false , InD = false, LastInD = 0 ,BreakOutFromD = 0 , BodyBiggerThanD = 0 , CandleBiggerThanD = 0 , CountMarbD = 0 ,
+                        SMA20VD = 0.0 , SMA20SD = 0.0 , SMA20DiD = 0 , SMA50VD = 0.0 , SMAsDiD = 0.0 , ATRD = 0 , RSID = 0, RSISD = 0 )
+        #=
+        j=1
+        for i in names(h)
+            println(j , " -> " , i)
+            j +=1
+        end
+        =#
+                PopulateRSI()
+                println("populate RSID done-> " , now())
+                h[200, 35] = mean(h[180:199 , 6]) #SMA
+                h[200, 38] = mean(h[150:199 , 6]) #SMA
+                for i in 201:nrow(h) - history_reduction
+                    j=7
+                    #h[i,j] = Int(round((h[i+3,6]-h[i,6])/pip)) #V3
+                    j+=1
+                    #h[i,j] = Int(round((h[i+10,6]-h[i,6])/pip)) #V10
+                    j+=1
+                    #h[i,j] = Int(round((h[i+20,6]-h[i,6])/pip)) #V20
+                    j+=1
+                    #h[i,j] = Int(round((maximum(h[i:i+20 , 4])-h[i,6])/pip)) #MaxV20
+                    j+=1
+                    #h[i,j] = Int(round((minimum(h[i:i+20 , 5])-h[i,6])/pip)) #MinV20
+                    j+=1
+                    #h[i,j] = Int(round((h[i+50 , 6]-h[i,6])/pip)) #V50
+                    j+=1
+                    #h[i,j] = Int(round((maximum(h[i:i+50 , 4])-h[i,6])/pip)) #MaxV20K
+                    j+=1
+                    #h[i,j] = Int(round((minimum(h[i:i+50 , 5])-h[i,6])/pip)) #MinV20K
+                    j+=1
+
+                    h[i+1,j] = CandleColor(i) #Color
+                    j+=1
+                    h[i+1,j] = ThreeCandlePattern(i) #ThrClr
+                    j+=1
+                    h[i+1,j] = round((h[i,6] - h[i,3])/pip; digits = 1) #ChngV
+                    j+=1
+                    h[i+1,j] = round(100*(h[i,6] / h[i,3] - 1); digits = 1) #ChngP
+                    j+=1
+                    h[i+1,j] = BodySize(i) #BSize
+                    j+=1
+                    h[i+1,j] = CandleSize(i) #CSize
+                    j+=1
+                    h[i+1,j] = IsDoji(i) #Doji
+                    j+=1
+                    h[i+1,j] = IsHammer(i) #Ham
+                    j+=1
+                    h[i+1,j] = IsInvHammer(i) #InvHam
+                    j+=1
+                    h[i+1,j] = IsMorningStar(i) #MornStar
+                    j+=1
+                    h[i+1,j] = HHHCLLLC(i) #HHLL
+                    j+=1
+                    h[i+1,j] = Engulfing(i) #Engulf
+                    j+=1
+                    h[i+1,j] = OutsideBar(i) #Out
+                    j+=1
+                    h[i+1,j] = InsideBar(i) #In
+                    j+=1
+                    h[i+1,j] = LastInsideBar(i) #LastIn
+                    j+=1
+                    h[i+1,j] = BreakoutFromLastXCandles(i) #BreakOutFrom
+                    j+=1
+                    h[i+1,j] = CountBiggerBodyThanX(i) #BodyBiggerThan
+                    j+=1
+                    h[i+1,j] = CountBiggerCandleThanX(i) #CandleBiggerThan
+                    j+=1
+                    h[i+1,j] = CountMarabuzos(i) #CountMarb
+                    j+=1
+                    h[i,j] = mean(h[i-20:i-1 , 6]) #SMA20V
+                    j+=1
+                    h[i,j] = round((h[i,j-1] - h[i-1,j-1])/pip; digits = 1) #SMA20S
+                    j+=1
+                    h[i,j] = Int(round((h[i-1,3] - h[i , j-2])/pip)) #SMA20Di
+                    j+=1
+                    h[i,j] =  mean(h[i-50:i-1 , 6]) #SMA50V
+                    j+=1
+                    h[i,j] = round((h[i+1,j-4] - h[i+1,j-1])/pip; digits = 1) #SMAsDi
+                    j+=1
+                    h[i+1,j] = ATR(i) #ATR
+                    j=j+2
+                    h[i+1,j] = h[i+1,j-1] - h[i,j-1] #RSIS#
+                end
+        return h
+    end
+
+    function CreateFile(user_input_pair , file_name)
+        history_path = "C:/Users/rgeyzer/AppData/Roaming/MetaQuotes/Terminal/D0E8209F77C8CF37AD8BF550E51FF075/MQL5/Files/History (MetaQuotes-Demo)/"
+        CSV.write(string(history_path ,user_input_pair ,file_name, ".csv") , finalDF[:,:])
+    end
+end
+
+begin # load data and run indicators
+    println("load data started -> " , now())
+    temp1 = PopulateM1()
+    println("Finished M1 -> " , now())
+    temp5 = PopulateM5()
+    println("Finished M5 -> " , now())
+    temp15 = PopulateM15()
+    println("Finished M15 -> " , now())
+    tempH = PopulateH()
+    println("Finished H -> " , now())
+    tempD = PopulateD()
+    println("Finished D -> " , now())
+end
+
+begin # join D&H
+    h = DataFrame(leftjoin(tempH,tempD, on = [:"Date", :"Time"]))
+    for i in 2:nrow(h)
+        if ismissing(h.OpenD[i]) # not a D candle
+            j=1
+            for column in names(h)
+                if 68<j
+                    h[i , column] = h[i-1 , column]
+                end
+                j +=1
+            end
+        end
+    end
+    println("Finished join D&H -> " , now())
+end
+
+begin # join 15M
+    h = DataFrame(leftjoin(temp15 , h ,  on = [:"Date", :"Time"]))
+    for i in 6:nrow(h)
+        if ismissing(h.OpenH[i]) # not a H candle
+            j=1
+            for column in names(h)
+                if 68<j<127 || j>130
+                    h[i , column] = h[i-1 , column]
+                end
+                j +=1
+            end
+        else # there is a 1 H candle
+            for k in i-4:i-1 # for all the count col (requires count if condition)
+                if h.Color15M[k] == Green
+                    h.CountGreenH15M[i] +=1
+                elseif h.Color15M[k] == Red
+                    h.CountRedH15M[i] +=1
+                end
+                if h.Doji15M[k]
+                    h.CountDojiH15M[i] +=1
+                end
+                if h.Ham15M[k]
+                    h.CountHamH15M[i] +=1
+                end
+                if h.InvHam15M[k]
+                    h.CountInvHamH15M[i] +=1
+                end
+                if h.MornStar15M[k]
+                    h.CountMornStarH15M[i] +=1
+                end
+                if h.HHLL15M[k]
+                    h.CountHHLLH15M[i] +=1
+                end
+                if h.Engulf15M[k]
+                    h.CountEngulfH15M[i] +=1
+                end
+                if h.Out15M[k]
+                    h.CountOutH15M[i] +=1
+                end
+                if h.In15M[k]
+                    h.CountInH15M[i] +=1
+                end
+            end
+            h.MaxChngVH15M[i] = maximum(h.ChngV15M[i-4:i-1])
+            h.MaxChngPH15M[i] = maximum(h.ChngP15M[i-4:i-1])
+            h.MinChngVH15M[i] = minimum(h.ChngV15M[i-4:i-1])
+            h.MinChngPH15M[i] = minimum(h.ChngP15M[i-4:i-1])
+            h.MaxBSizeH15M[i] = maximum(h.BSize15M[i-4:i-1])
+            h.MaxCSizeH15M[i] = maximum(h.CSize15M[i-4:i-1])
+            h.MaxLastInH15M[i] = maximum(h.LastIn15M[i-4:i-1])
+            h.MaxBreakOutFromH15M[i] = maximum(h.BreakOutFrom15M[i-4:i-1])
+            h.MaxBodyBiggerThanH15M[i] = maximum(h.BodyBiggerThan15M[i-4:i-1])
+            h.MaxCandleBiggerThanH15M[i] = maximum(h.CandleBiggerThan15M[i-4:i-1])
+            h.MaxCountMarbH15M[i] = maximum(h.CountMarb15M[i-4:i-1])
+            h.MaxRSISH15M[i] = maximum(h.RSIS15M[i-4:i-1])
+            h.MinRSISH15M[i] = minimum(h.RSIS15M[i-4:i-1])
+        end
+    end
+    println("Finished join 15m -> " , now())
+end
+
+
+begin # join 5M
+    h = DataFrame(leftjoin(temp5 , h ,  on = [:"Date", :"Time"]))
+    for i in 6:nrow(h)
+        if ismissing(h.Open15[i]) # not a 15min candle
+            j=1
+            for column in names(h)
+                if 68<j<133 || 136<j<195 || 198<j
+                    h[i , column] = h[i-1 , column]
+                end
+                j +=1
+            end
+        else # there is a 1 15m candle
+            for k in i-3:i-1
+                if h.Color5M[k] == Green
+                    h.CountGreen15M5M[i] +=1
+                elseif h.Color5M[k] == Red
+                    h.CountRed15M5M[i] +=1
+                end
+                if h.Doji5M[k]
+                    h.CountDoji15M5M[i] +=1
+                end
+                if h.Ham5M[k]
+                    h.CountHam15M5M[i] +=1
+                end
+                if h.InvHam5M[k]
+                    h.CountInvHam15M5M[i] +=1
+                end
+                if h.MornStar5M[k]
+                    h.CountMornStar15M5M[i] +=1
+                end
+                if h.HHLL5M[k]
+                    h.CountHHLL15M5M[i] +=1
+                end
+                if h.Engulf5M[k]
+                    h.CountEngulf15M5M[i] +=1
+                end
+                if h.Out5M[k]
+                    h.CountOut15M5M[i] +=1
+                end
+                if h.In5M[k]
+                    h.CountIn15M5M[i] +=1
+                end
+            end
+            h.MaxChngV15M5M[i] = maximum(h.ChngV5M[i-3:i-1])
+            h.MaxChngP15M5M[i] = maximum(h.ChngP5M[i-3:i-1])
+            h.MinChngV15M5M[i] = minimum(h.ChngV5M[i-3:i-1])
+            h.MinChngP15M5M[i] = minimum(h.ChngP5M[i-3:i-1])
+            h.MaxBSize15M5M[i] = maximum(h.BSize5M[i-3:i-1])
+            h.MaxCSize15M5M[i] = maximum(h.CSize5M[i-3:i-1])
+            h.MaxLastIn15M5M[i] = maximum(h.LastIn5M[i-3:i-1])
+            h.MaxBreakOutFrom15M5M[i] = maximum(h.BreakOutFrom5M[i-3:i-1])
+            h.MaxBodyBiggerThan15M5M[i] = maximum(h.BodyBiggerThan5M[i-3:i-1])
+            h.MaxCandleBiggerThan15M5M[i] = maximum(h.CandleBiggerThan5M[i-3:i-1])
+            h.MaxCountMarb15M5M[i] = maximum(h.CountMarb5M[i-3:i-1])
+            h.MaxRSIS15M5M[i] = maximum(h.RSIS5M[i-3:i-1])
+            h.MinRSIS15M5M[i] = minimum(h.RSIS5M[i-3:i-1])
+        end
+    end
+    println("Finished join 5m -> " , now())
+end
+
+begin # join 1M
+    h = DataFrame(leftjoin(temp1 , h ,  on = [:"Date", :"Time"]))
+    for i in 6:nrow(h)
+        if ismissing(h.Open5[i]) # not a 15min candle
+            j=1
+            for column in names(h)
+                if 46<j<105 || 108<j<173 || 176<j<235 ||  238<j
+                    h[i , column] = h[i-1 , column]
+                end
+                j +=1
+            end
+        else # there is a 5m candle
+            for k in i-5:i-1
+                if h.Color[k] == Green
+                    h.CountGreen5M1M[i] +=1
+                elseif h.Color[k] == Red
+                    h.CountRed5M1M[i] +=1
+                end
+                if h.Doji[k]
+                    h.CountDoji5M1M[i] +=1
+                end
+                if h.Ham[k]
+                    h.CountHam5M1M[i] +=1
+                end
+                if h.InvHam[k]
+                    h.CountInvHam5M1M[i] +=1
+                end
+                if h.MornStar[k]
+                    h.CountMornStar5M1M[i] +=1
+                end
+                if h.HHLL[k]
+                    h.CountHHLL5M1M[i] +=1
+                end
+                if h.Engulf[k]
+                    h.CountEngulf5M1M[i] +=1
+                end
+                if h.Out[k]
+                    h.CountOut5M1M[i] +=1
+                end
+                if h.In[k]
+                    h.CountIn5M1M[i] +=1
+                end
+            end
+            h.MaxChngV5M1M[i] = maximum(h.ChngV[i-5:i-1])
+            h.MaxChngP5M1M[i] = maximum(h.ChngP[i-5:i-1])
+            h.MinChngV5M1M[i] = minimum(h.ChngV[i-5:i-1])
+            h.MinChngP5M1M[i] = minimum(h.ChngP[i-5:i-1])
+            h.MaxBSize5M1M[i] = maximum(h.BSize[i-5:i-1])
+            h.MaxCSize5M1M[i] = maximum(h.CSize[i-5:i-1])
+            h.MaxLastIn5M1M[i] = maximum(h.LastIn[i-5:i-1])
+            h.MaxBreakOutFrom5M1M[i] = maximum(h.BreakOutFrom[i-5:i-1])
+            h.MaxBodyBiggerThan5M1M[i] = maximum(h.BodyBiggerThan[i-5:i-1])
+            h.MaxCandleBiggerThan5M1M[i] = maximum(h.CandleBiggerThan[i-5:i-1])
+            h.MaxCountMarb5M1M[i] = maximum(h.CountMarb[i-5:i-1])
+            h.MaxRSIS5M1M[i] = maximum(h.RSIS[i-5:i-1])
+            h.MinRSIS5M1M[i] = minimum(h.RSIS[i-5:i-1])
+        end
+    end
+    println("Finished join 1m -> " , now())
+end
+
+println("Finished join -> " , now())
+println("Finished DB creation -> " , now())
+println(describe(h))
+finalDF = DataFrame(h[100000:end-100000,:])
+CreateFile(user_input_pair , "Rev6")
+println("Finished writing file -> " , now())
+println(describe(finalDF))
+println("Finished all -> " , now())
+#CSV.write(string(history_path , "testfile.csv") , h[end-120000:end-110000,:])

@@ -1,0 +1,505 @@
+
+# support OE EA
+
+
+begin # using block
+    using CSV
+    using DataFrames
+    using Statistics
+    using Dates
+end
+
+println("REV 10")
+println("Start -> " , now())
+global pip = 0.0001
+
+history_path = "C:/Users/rgeyzer/AppData/Roaming/MetaQuotes/Terminal/D0E8209F77C8CF37AD8BF550E51FF075/MQL5/Files/History (MetaQuotes-Demo)/"
+
+
+begin # define constants
+    #@enum TimeFrame M1=5 M5=10 M15=15 H1=20 D1=25
+    @enum Color Red=-1 Green=1 NoColor =0
+    #@enum Signal Sell=-1 Buy=1
+end
+
+begin # base candles functions
+    function CandleColor(index::Int)
+        if h[index,3] > h[index,6]
+            return Red
+        end
+        if h[index,3] < h[index,6]
+            return Green
+        end
+        NoColor
+    end
+
+    function ThreeCandlePattern(index::Int)
+        tempStr = ""
+        if (CandleColor(index - 2) == Green)
+            tempStr = string(tempStr , 'G')
+        elseif (CandleColor(index - 2) == Red)
+            tempStr = string(tempStr , 'R')
+        else
+            tempStr = string(tempStr , 'N')
+        end
+
+        if (CandleColor(index - 1) == Green)
+            tempStr = string(tempStr , 'G')
+        elseif (CandleColor(index - 1) == Red)
+            tempStr = string(tempStr , 'R')
+        else
+            tempStr = string(tempStr , 'N')
+        end
+
+        if (CandleColor(index ) == Green)
+            tempStr = string(tempStr , 'G')
+        elseif (CandleColor(index ) == Red)
+            tempStr = string(tempStr , 'R')
+        else
+            tempStr = string(tempStr , 'N')
+        end
+        return tempStr
+    end
+
+    function BodySize(index::Int)
+        bsize = abs(h[index,3] - h[index,6])
+        bsize = round(bsize/pip; digits = 1)
+    end
+
+    function CandleSize(index::Int )
+        csize = abs(h[index,4] - h[index,5])
+        csize = round(csize/pip; digits = 1)
+    end
+
+    function HHHCLLLC(index::Int)
+        lastc = index-1
+        if CandleColor(index) == Green
+            return h[index,4]>h[lastc,4] && h[index,6]>h[lastc,6]
+        end
+        if CandleColor(index) == Red
+            return h[index,5]<h[lastc,5] && h[index,6]<h[lastc,6]
+        end
+        return false
+    end
+
+    function Engulfing(index::Int)
+        lastc = index-1
+        if CandleColor(lastc)==CandleColor(index)
+            return false
+        end
+        if CandleColor(index) == Green
+            return h[index,3]<=h[lastc,6] && h[index,6]>=h[lastc,3]
+        end
+        if CandleColor(index) == Red
+            return h[index,3]>=h[lastc,6] && h[index,6]<=h[lastc,3]
+        end
+        # no color:
+        return false
+    end
+
+    function OutsideBar(index::Int )
+        lastc = index-1
+        return h[index,4]>h[lastc,4] && h[index,5]<h[lastc,5]
+    end
+
+    function InsideBar(index::Int )
+        lastc = index-1
+        return h[index,4]<h[lastc,4] && h[index,5]>h[lastc,5]
+    end
+
+    function FindGRRatio(index::Int , length::Int)
+        RedCounter = 0
+        GreenCounter = 0
+        candle = index
+        for i in 1:length
+            if CandleColor(candle) == Green
+                GreenCounter +=1
+            elseif CandleColor(candle) == Red
+                RedCounter +=1
+            end
+            candle -=1
+        end
+        return round(GreenCounter / RedCounter; digits = 2)
+    end
+end
+
+begin # populate functions
+    function PopulateM15(user_input_pair)
+        user_input_tf = "M15"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "Open15" , "High15" , "Low15"  , "Close15" , "Volume15"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  Open15 = r[:,3], High15 = r[:,4], Low15 = r[:,5], Close15 = r[:,6],
+        Color15M= NoColor,ThrClr15M = "" , BSize15M = 0.0, CSize15M = 0.0, HHLL15M = false, Engulf15M = false, Out15M = false , In15M = false,
+        GRRatioLast30_15M = 0.0 ,GRRatioLast50_15M = 0.0 ,GRRatioLast75_15M = 0.0 ,GRRatioLast100_15M = 0.0, GRRatioLast125_15M = 0.0 ,GRRatioLast150_15M = 0.0,
+        GRRatioLast200_15M = 0.0 ,GRRatioLast250_15M = 0.0 ,GRRatioLast300_15M = 0.0, GRRatioLast400_15M = 0.0 ,GRRatioLast500_15M = 0.0 ,
+        FirstPointValue = 0.0 ,SecondPointValue = 0.0 ,ThirdPointValue = 0.0 ,FourthPointValue = 0.0 ,FithPointValue = 0.0 ,
+        IntegratedScoreShort = 0.0 ,IntegratedScoreMid = 0.0 ,IntegratedScoreLong = 0.0 , )
+        #=
+        j=1
+        for i in names(h)
+            println(j , " -> " , i)
+            j +=1
+        end
+        =#
+        for i in 510:nrow(h) - 3010
+            j=7
+            h[i+1,j] = CandleColor(i) #Color
+            j+=1
+            h[i+1,j] = ThreeCandlePattern(i) #ThrClr
+            j+=1
+            h[i+1,j] = BodySize(i) #BSize
+            j+=1
+            h[i+1,j] = CandleSize(i) #CSize
+            j+=1
+            h[i+1,j] = HHHCLLLC(i) #HHLL
+            j+=1
+            h[i+1,j] = Engulfing(i) #Engulf
+            j+=1
+            h[i+1,j] = OutsideBar(i) #Out
+            j+=1
+            h[i+1,j] = InsideBar(i) #In
+            j+=1
+            h[i+1,j] = FindGRRatio(i , 30) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 50) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 75) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 100) #GR Ratio
+            j+=1
+            h[i+1,j] = FindGRRatio(i , 125) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 150) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 200) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 250) #GR Ratio
+            j+=1
+            h[i+1,j] = FindGRRatio(i , 300) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 400) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 500) #GR Ratio
+
+
+            h.FirstPointValue[i] = round((h[i+25 , 3]-h[i,3])/pip; digits = 1) # 6 hours
+            h.SecondPointValue[i] = round((h[i+100 , 3]-h[i,3])/pip; digits = 1) # 1 Day
+            h.ThirdPointValue[i] = round((h[i+500 , 3]-h[i,3])/pip; digits = 1) # 1 week
+            h.FourthPointValue[i] = round((h[i+1000 , 3]-h[i,3])/pip; digits = 1) # 2 weeks
+            h.FithPointValue[i] = round((h[i+2500 , 3]-h[i,3])/pip; digits = 1) # 1 Month
+            TempMax = maximum(h[i:i+24 , 4])-h[i,3]
+            TempMin = h[i,3]-minimum(h[i:i+24 , 5])
+            TempMax2 = maximum(h[i:i+99 , 4])-h[i,3]
+            TempMin2 = h[i,3] - minimum(h[i:i+99 , 5])
+            TempMax3 = maximum(h[i:i+499 , 4])-h[i,3]
+            TempMin3 = h[i,3]-minimum(h[i:i+499 , 5])
+            TempMax4 = maximum(h[i:i+999 , 4])-h[i,3]
+            TempMin4 = h[i,3] - minimum(h[i:i+999 , 5])
+
+
+            h.IntegratedScoreShort[i] = 0.05 * TempMax + 0.05*TempMin  +0.1*TempMax2 + 0.15 * TempMin2 + 0.15 * h.FirstPointValue[i] + 0.1 * h.ThirdPointValue[i] + 0.4* h.SecondPointValue[i]
+            h.IntegratedScoreMid[i] = 0.05 * TempMax2 + 0.05*TempMin2  +0.1*TempMax3 + 0.15 * TempMin3 + 0.15 * h.SecondPointValue[i] + 0.1 * h.FourthPointValue[i] + 0.4* h.ThirdPointValue[i]
+            h.IntegratedScoreLong[i] = 0.05 * TempMax3 + 0.05*TempMin3  +0.1*TempMax4 + 0.15 * TempMin4 + 0.15 * h.ThirdPointValue[i] + 0.1 * h.FithPointValue[i] + 0.4* h.FourthPointValue[i]
+        end
+
+        insertcols!(h, 3, :Hour => 0)
+        for i in 510:nrow(h)-510
+            h.Hour[i] = hour(h.Time[i])
+        end
+        return h
+    end
+
+    function PopulateH(user_input_pair)
+        user_input_tf = "H1"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "OpenH" , "HighH" , "LowH"  , "CloseH" , "VolumeH"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  OpenH = r[:,3], HighH = r[:,4], LowH = r[:,5], CloseH = r[:,6],
+                        ColorH = NoColor,ThrClrH = "" , BSizeH = 0.0 , CSizeH = 0.0 , HHLLH = false , EngulfH = false , OutH = false , InH = false,
+                        GRRatioLast30_H = 0.0 ,GRRatioLast50_H = 0.0 ,GRRatioLast75_H = 0.0 ,GRRatioLast100_H = 0.0, GRRatioLast125_H = 0.0 ,GRRatioLast150_H = 0.0,
+                        GRRatioLast200_H = 0.0 ,GRRatioLast250_H = 0.0 ,GRRatioLast300_H = 0.0, GRRatioLast400_H = 0.0 ,GRRatioLast500_H = 0.0 )
+        #=
+        j=1
+        for i in names(h)
+            println(j , " -> " , i)
+            j +=1
+        end
+        =#
+
+        for i in 510:nrow(h) - 510
+            j=7
+            h[i+1,j] = CandleColor(i) #Color
+            j+=1
+            h[i+1,j] = ThreeCandlePattern(i) #ThrClr
+            j+=1
+            h[i+1,j] = BodySize(i) #BSize
+            j+=1
+            h[i+1,j] = CandleSize(i) #CSize
+            j+=1
+            h[i+1,j] = HHHCLLLC(i) #HHLL
+            j+=1
+            h[i+1,j] = Engulfing(i) #Engulf
+            j+=1
+            h[i+1,j] = OutsideBar(i) #Out
+            j+=1
+            h[i+1,j] = InsideBar(i) #In
+            j+=1
+            h[i+1,j] = FindGRRatio(i , 30) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 50) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 75) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 100) #GR Ratio
+            j+=1
+            h[i+1,j] = FindGRRatio(i , 125) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 150) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 200) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 250) #GR Ratio
+            j+=1
+            h[i+1,j] = FindGRRatio(i , 300) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 400) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 500) #GR Ratio
+        end
+        return h
+    end
+
+    function PopulateH4(user_input_pair)
+        user_input_tf = "H4"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "OpenH4" , "HighH4" , "LowH4"  , "CloseH4" , "VolumeH4"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  OpenH4 = r[:,3], HighH4 = r[:,4], LowH4 = r[:,5], CloseH4 = r[:,6],
+                        ColorH4 = NoColor,ThrClrH4 = "" , BSizeH4 = 0.0 , CSizeH4 = 0.0 , HHLLH4 = false , EngulfH4 = false , OutH4 = false , InH4 = false,
+                        GRRatioLast30_H4 = 0.0 ,GRRatioLast50_H4 = 0.0 ,GRRatioLast75_H4 = 0.0 ,GRRatioLast100_H4 = 0.0, GRRatioLast125_H4 = 0.0 ,GRRatioLast150_H4 = 0.0,
+                        GRRatioLast200_H4 = 0.0 ,GRRatioLast250_H4 = 0.0 ,GRRatioLast300_H4 = 0.0 )
+        #=
+        j=1
+        for i in names(h)
+            println(j , " -> " , i)
+            j +=1
+        end
+        =#
+        for i in 310:nrow(h) - 100
+            j=7
+            h[i+1,j] = CandleColor(i) #Color
+            j+=1
+            h[i+1,j] = ThreeCandlePattern(i) #ThrClr
+            j+=1
+            h[i+1,j] = BodySize(i) #BSize
+            j+=1
+            h[i+1,j] = CandleSize(i) #CSize
+            j+=1
+            h[i+1,j] = HHHCLLLC(i) #HHLL
+            j+=1
+            h[i+1,j] = Engulfing(i) #Engulf
+            j+=1
+            h[i+1,j] = OutsideBar(i) #Out
+            j+=1
+            h[i+1,j] = InsideBar(i) #In
+            j+=1
+            h[i+1,j] = FindGRRatio(i , 30) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 50) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 75) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 100) #GR Ratio
+            j+=1
+            h[i+1,j] = FindGRRatio(i , 125) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 150) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 200) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 250) #GR Ratio
+            j+=1
+            h[i+1,j] = FindGRRatio(i , 300) #GR Ratio
+        end
+        return h
+    end
+
+    function PopulateD(user_input_pair)
+        user_input_tf = "D1"
+        r = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        heder= ["Date" , "Time", "OpenD" , "HighD" , "LowD"  , "CloseD" , "VolumeD"]
+        rename!(r , heder)
+
+        global h = DataFrame( Date = r[:,1], Time = r[:,2]  ,  OpenD = r[:,3], HighD = r[:,4], LowD = r[:,5], CloseD = r[:,6],
+                        ColorD = NoColor,ThrClrD = "" , BSizeD = 0.0 , CSizeD = 0.0 , HHLLD = false , EngulfD = false , OutD = false , InD = false,
+                        GRRatioLast30_D = 0.0 ,GRRatioLast50_D = 0.0 ,GRRatioLast75_D = 0.0 ,GRRatioLast100_D = 0.0, GRRatioLast125_D = 0.0 ,GRRatioLast150_D = 0.0,
+                        GRRatioLast200_D = 0.0 )
+        #=
+        j=1
+        for i in names(h)
+            println(j , " -> " , i)
+            j +=1
+        end
+        =#
+
+        for i in 210:nrow(h) - 50
+            j=7
+            h[i+1,j] = CandleColor(i) #Color
+            j+=1
+            h[i+1,j] = ThreeCandlePattern(i) #ThrClr
+            j+=1
+            h[i+1,j] = BodySize(i) #BSize
+            j+=1
+            h[i+1,j] = CandleSize(i) #CSize
+            j+=1
+            h[i+1,j] = HHHCLLLC(i) #HHLL
+            j+=1
+            h[i+1,j] = Engulfing(i) #Engulf
+            j+=1
+            h[i+1,j] = OutsideBar(i) #Out
+            j+=1
+            h[i+1,j] = InsideBar(i) #In
+            j+=1
+            h[i+1,j] = FindGRRatio(i , 30) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 50) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 75) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 100) #GR Ratio
+            j+=1
+            h[i+1,j] = FindGRRatio(i , 125) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 150) #GR Ratio
+            j=j+1
+            h[i+1,j] = FindGRRatio(i , 200) #GR Ratio
+        end
+        return h
+    end
+
+    function CreateFile(user_input_pair , file_name)
+        history_path = "C:/Users/rgeyzer/AppData/Roaming/MetaQuotes/Terminal/D0E8209F77C8CF37AD8BF550E51FF075/MQL5/Files/History (MetaQuotes-Demo)/"
+        CSV.write(string(history_path ,user_input_pair ,file_name, ".csv") , finalDF[:,:])
+    end
+end
+
+function crete_file_for_pair(user_input_pair) # load data and creat DB + file
+    println("Started -> " , user_input_pair ," ,at -> " , now())
+
+    if !isnothing(findfirst("JPY" , user_input_pair))||!isnothing(findfirst("XAU" , user_input_pair))
+        pip = 0.01
+    else
+        pip = 0.0001
+    end
+
+    println("pip value is: " , pip)
+    println("load data started -> " , now())
+    temp15 = PopulateM15(user_input_pair)
+    println("Finished M15 -> " , now())
+    tempH = PopulateH(user_input_pair)
+    println("Finished H -> " , now())
+    tempH4 = PopulateH4(user_input_pair)
+    println("Finished H4 -> " , now())
+    tempD = PopulateD(user_input_pair)
+    println("Finished D -> " , now())
+
+    begin # join D&H4
+        h = DataFrame(leftjoin(tempH4,tempD, on = [:"Date", :"Time"]))
+        #=
+        j=1
+        for i in names(h)
+            println(j , " -> " , i)
+            j +=1
+        end
+        =#
+
+        for i in 2:nrow(h)
+            if ismissing(h.OpenD[i]) # not a D candle
+                j=1
+                for column in names(h)
+                    if 27<j
+                        h[i , column] = h[i-1 , column]
+                    end
+                    j +=1
+                end
+            end
+        end
+        println("Finished join D&H4 -> " , now())
+    end
+
+    begin # join H
+        h = DataFrame(leftjoin(tempH , h , on = [:"Date", :"Time"]))
+        #=
+        j=1
+        for i in names(h)
+            println(j , " -> " , i)
+            j +=1
+        end
+        =#
+
+        for i in 2:nrow(h)
+            if ismissing(h.OpenH4[i]) # not a H4 candle
+                j=1
+                for column in names(h)
+                    if 29<j<47 || 50<j
+                        h[i , column] = h[i-1 , column]
+                    end
+                    j +=1
+                end
+            end
+        end
+        println("Finished join H -> " , now())
+    end
+
+    begin # join 15M
+        h = DataFrame(leftjoin(temp15 , h ,  on = [:"Date", :"Time"]))
+        #=
+        j=1
+        for i in names(h)
+            println(j , " -> " , i)
+            j +=1
+        end
+        =#
+
+        for i in 2:nrow(h)
+            if ismissing(h.OpenH[i]) # not a H candle
+                j=1
+                for column in names(h)
+                    if 38<j<58 || 61<j<79 || j>82
+                        h[i , column] = h[i-1 , column]
+                    end
+                    j +=1
+                end
+            end
+        end
+        println("Finished join 15m -> " , now())
+    end
+
+    println("Finished join -> " ,   now())
+    println("Finished DB creation -> " , now())
+    #println(describe(h))
+    first_value = 20000
+    if nrow(h)>220000
+        first_value = nrow(h) - 220000
+    end
+    global finalDF = DataFrame(h[first_value:end-20000,:])
+    CreateFile(user_input_pair , "Rev10")
+    println("Finished writing file -> " , now())
+    #println(describe(finalDF))
+    println(user_input_pair , " -> Finished all -> "  , now())
+    #CSV.write(string(history_path , "testfile.csv") , h[end-120000:end-110000,:])
+end
+
+#crete_file_for_pair("AUDJPY")
+
+
+pairs = ["AUDCAD" , "AUDCHF"  ,"AUDJPY" ,"AUDNZD","AUDUSD","CADCHF","CADJPY","CHFJPY","EURAUD","EURCAD","EURCHF","EURGBP","EURJPY","EURNZD","EURUSD",
+          "GBPAUD" ,"GBPCAD","GBPCHF","GBPJPY","GBPNZD","GBPUSD","NZDCAD","NZDCHF","NZDJPY","NZDUSD","USDCAD","USDCHF","USDJPY","XAUUSD"]
+
+for pair in pairs
+    crete_file_for_pair(pair)
+end

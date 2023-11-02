@@ -1,0 +1,1300 @@
+begin # using block
+    using CSV
+    using DataFrames
+    using Statistics
+    using Dates
+end
+
+begin # define constants
+    @enum TimeFrame M1=5 M5=10 M15=14 H1=18 D1=22
+    @enum Color Red=-1 Green=1 NoColor =0
+    @enum Signal Sell=-1 Buy=1
+    marbuzo_ratio=4
+    history_reduction = 20011
+    pip = 0.0001
+end
+
+begin # base candles functions
+    I(x::TimeFrame)=Int(x)
+
+    function M(tf=M1::TimeFrame)
+        if tf==M1
+            return 1
+        end
+        if tf==M5
+            return 5
+        end
+        if tf==M15
+            return 15
+        end
+        if tf==H1
+            return 60
+        end
+        if tf==D1
+            return 1440
+        end
+    end
+
+    function FindLastCandle(index::Int , tf=M1::TimeFrame)
+        if tf==M1
+            if IsCandle(index-1)
+                return index-1
+            end
+            return (FindLastCandle(index-1))
+        end
+        if tf==M5
+            if IsCandle(index-5 , tf)
+                return index-5
+            end
+            return (FindLastCandle(index-1,tf))
+        end
+        if tf==M15
+            if (IsCandle(index-15,tf))
+                return index-15
+            end
+            return (FindLastCandle(index-1,tf))
+        end
+        if tf==H1
+            j=60
+            while j>55
+                if hour(h.Time[index-j-1])!= hour(h.Time[index-j])
+                    if IsCandle(index-j,tf)
+                        return index-j
+                    end
+                    return (FindLastCandle(index-55,tf))
+                end
+                j=j-1
+            end
+            return (FindLastCandle(index-55,tf))
+        end
+        if tf==D1
+            j=1440
+            while j>1300
+                if h.Date[index-j-1][end-1:end]!= h.Date[index-j][end-1:end]
+                    if IsCandle(index-j,tf)
+                        return index-j
+                    end
+                    return (FindLastCandle(index-1300,tf))
+                end
+                j=j-1
+            end
+            return (FindLastCandle(index-1300,tf))
+        end
+    end
+
+    function FindNextCandle(index::Int , tf=M1::TimeFrame)
+        if tf==M1
+            if IsCandle(index+1)
+                return index+1
+            end
+            return FindNextCandle(index+1)
+        end
+        if tf==M5
+            if IsCandle(index+5 , tf)
+                return index+5
+            end
+            return FindNextCandle(index+1 , tf)
+        end
+        if tf==M15
+            if (IsCandle(index+15,tf))
+                return index+15
+            end
+            return FindNextCandle(index+1 , tf)
+        end
+        if tf==H1
+            j=60
+            while j>55
+                if hour(h.Time[index+j-1])!= hour(h.Time[index+j])
+                    if IsCandle(index+j,tf)
+                        return index+j
+                    end
+                end
+                j=j-1
+            end
+            return FindNextCandle(index+55 , tf)
+        end
+        if tf==D1
+            j=1440
+            while j>1300
+                if h.Date[index+j-1][end-1:end]!= h.Date[index+j][end-1:end]
+                    if IsCandle(index+j,tf)
+                        return index+j
+                    end
+                end
+                j=j-1
+            end
+            return FindNextCandle(index+1300 , tf)
+        end
+    end
+
+    function IsCandle(index::Int , tf=M1::TimeFrame)
+        tempbool = h[index,I(tf)] > 0 && h[index,I(tf)+1] > 0 && h[index,I(tf)+2] > 0 && h[index,I(tf)+3] > 0
+    end
+
+    function CandleColor(index::Int , tf=M1::TimeFrame)
+        if h[index,I(tf)] > h[index,I(tf)+3]
+            return Red
+        end
+        if h[index,I(tf)] < h[index,I(tf)+3]
+            return Green
+        end
+        NoColor
+    end
+
+    function BodySize(index::Int , tf=M1::TimeFrame)
+        bsize = abs(h[index,I(tf)] - h[index,I(tf)+3])
+        bsize = round(bsize/pip; digits = 1)
+    end
+
+    function CandleSize(index::Int , tf=M1::TimeFrame)
+        csize = abs(h[index,I(tf)+1] - h[index,I(tf)+2])
+        csize = round(csize/pip; digits = 1)
+    end
+
+    function UpperWikSize(index::Int , tf=M1::TimeFrame)
+        if CandleColor(index,tf)==Red
+            return (h[index,I(tf)+1]-h[index,I(tf)])/pip
+        end
+        return (h[index,I(tf)+1]-h[index,I(tf)+3])/pip
+    end
+
+    function LowerWikSize(index::Int , tf=M1::TimeFrame)
+        if CandleColor(index,tf)==Red
+            return (h[index,I(tf)+3]-h[index,I(tf)+2])/pip
+        end
+        return (h[index,I(tf)]-h[index,I(tf)+2])/pip
+    end
+
+    function UpperWikRatio(index::Int , tf=M1::TimeFrame)
+        if UpperWikSize(index,tf)==0
+            return 1000
+        end
+        return BodySize(index,tf) / UpperWikSize(index,tf)
+    end
+
+    function LowerWikRatio(index::Int , tf=M1::TimeFrame)
+        if LowerWikSize(index,tf)==0
+            return 1000
+        end
+        return BodySize(index,tf) / LowerWikSize(index,tf)
+    end
+
+    function WikRatio(index::Int , tf=M1::TimeFrame)
+        if LowerWikSize(index,tf)==0 && UpperWikSize(index,tf)==0 # no wiks
+            return 1000
+        end
+        return BodySize(index,tf) / (UpperWikSize(index,tf)+LowerWikSize(index,tf))
+    end
+
+    function IsMarbuzo(index::Int , tf=M1::TimeFrame)
+        if !IsCandle(index,tf) || CandleColor(index,tf)== NoColor
+            return false
+        end
+        return max(UpperWikRatio(index,tf),LowerWikRatio(index,tf))>=4 && WikRatio(index,tf)>2.5
+    end
+
+    function IsDoji(index::Int , tf=M1::TimeFrame)
+        if !IsCandle(index,tf)
+            return false
+        end
+        if UpperWikSize(index,tf)>0 && LowerWikSize(index,tf)>0 && 0.25<UpperWikSize(index,tf)/LowerWikSize(index,tf)<4
+            return WikRatio(index,tf)<0.17
+        end
+        return false
+    end
+
+    function IsHammer(index::Int , tf=M1::TimeFrame)
+        if !IsCandle(index,tf) || WikRatio(index,tf)>0.25
+            return false
+        end
+        if UpperWikSize(index,tf) ==0
+            return true
+        end
+        if LowerWikSize(index,tf)/UpperWikSize(index,tf) > 2.5
+            return true
+        end
+        return false
+    end
+
+    function IsInvHammer(index::Int , tf=M1::TimeFrame)
+        if !IsCandle(index,tf) || WikRatio(index,tf)>0.25
+            return false
+        end
+        if LowerWikSize(index,tf) ==0
+            return true
+        end
+        if UpperWikSize(index,tf)/LowerWikSize(index,tf) > 2.5
+            return true
+        end
+        return false
+    end
+
+    function IsMorningStar(index::Int , tf=M1::TimeFrame)
+        dojic = FindLastCandle(index,tf)
+        if dojic<0
+            return false
+        end
+        last_trend_candle = FindLastCandle(dojic,tf)
+        if last_trend_candle<0
+            return false
+        end
+        if IsCandle(index,tf) && IsCandle(dojic,tf) && IsCandle(last_trend_candle,tf) && IsDoji(dojic,tf) && CandleColor(index,tf) != CandleColor(last_trend_candle,tf) && IsMarbuzo(last_trend_candle,tf)&& IsMarbuzo(index,tf)
+            return true
+        end
+        return false
+    end
+end
+
+begin # pattern recognition functions
+    function HHHCLLLC(index::Int , tf=M1::TimeFrame)
+        lastc = FindLastCandle(index,tf)
+        if lastc<0
+            return false
+        end
+        if CandleColor(index,tf) == Green
+            return h[index,I(tf)+1]>h[lastc,I(tf)+1] && h[index,I(tf)+3]>h[lastc,I(tf)+3]
+        end
+        if CandleColor(index,tf) == Red
+            return h[index,I(tf)+2]<h[lastc,I(tf)+2] && h[index,I(tf)+3]<h[lastc,I(tf)+3]
+        end
+        # no color:
+        if h[index,I(tf)+1]>h[lastc,I(tf)+1] && h[index,I(tf)+3]>h[lastc,I(tf)+3]
+            return true # HHHC
+        end
+        if h[index,I(tf)+2]<h[lastc,I(tf)+2] && h[index,I(tf)+3]<h[lastc,I(tf)+3]
+            return true # LLLC
+        end
+        return false
+    end
+
+    function Engulfing(index::Int , tf=M1::TimeFrame)
+        lastc = FindLastCandle(index,tf)
+        if lastc<0
+            return false
+        end
+        if CandleColor(lastc,tf)==CandleColor(index,tf)
+            return false
+        end
+        if CandleColor(index,tf) == Green
+            return h[index,I(tf)]<=h[lastc,I(tf)+3] && h[index,I(tf)+3]>=h[lastc,I(tf)]
+        end
+        if CandleColor(index,tf) == Red
+            return h[index,I(tf)]>=h[lastc,I(tf)+3] && h[index,I(tf)+3]<=h[lastc,I(tf)]
+        end
+        # no color:
+        return false
+    end
+
+    function OutsideBar(index::Int , tf=M1::TimeFrame)
+        lastc = FindLastCandle(index,tf)
+        if lastc<0
+            return false
+        end
+        return h[index,I(tf)+1]>h[lastc,I(tf)+1] && h[index,I(tf)+2]<h[lastc,I(tf)+2]
+    end
+
+    function InsideBar(index::Int , tf=M1::TimeFrame)
+        lastc = FindLastCandle(index,tf)
+        if lastc<0
+            return false
+        end
+        return h[index,I(tf)+1]<h[lastc,I(tf)+1] && h[index,I(tf)+2]>h[lastc,I(tf)+2]
+    end
+end
+
+begin # multiple candlles comparison functions
+    function LastInsideBar(index::Int , tf=M1::TimeFrame)
+        updated_last_candle = FindLastCandle(index,tf)
+        for i in 1:100
+            if InsideBar(updated_last_candle,tf)
+                return i
+            end
+            updated_last_candle = FindLastCandle(updated_last_candle,tf)
+        end
+        return 100
+    end
+
+    function BreakoutFromLastXCandles(index::Int , tf=M1::TimeFrame)
+        if !HHHCLLLC(index,tf)
+            return -1
+        end
+        if CandleColor(index,tf)==Green
+            HighArr = CreatePriceArr(index , 101 , 1 , tf)
+            reverse!(HighArr)
+            for i in 101:-1:2
+                if h[index,I(tf)+3]>maximum(HighArr[2:i])
+                    return i-1
+                end
+            end
+        end
+
+        if CandleColor(index,tf)==Red
+            HighArr = CreatePriceArr(index , 101 , 2 , tf)
+            reverse!(HighArr)
+            for i in 101:-1:2
+                if h[index,I(tf)+3]<minimum(HighArr[2:i])
+                    return i-1
+                end
+            end
+        end
+        return -1
+    end
+
+    function CountBiggerCandleThanX(index::Int , tf=M1::TimeFrame)
+        size = CandleSize(index,tf)
+        updated_last_candle = FindLastCandle(index,tf)
+        counter = 0
+        i=0
+        while i<99
+            if size<=CandleSize(updated_last_candle , tf)
+                return counter
+            end
+        counter = counter+1
+        i = i+1
+        updated_last_candle = FindLastCandle(updated_last_candle,tf)
+        end
+        return 100
+    end
+
+    function CountBiggerBodyThanX(index::Int , tf=M1::TimeFrame)
+        size = BodySize(index,tf)
+        updated_last_candle = FindLastCandle(index,tf)
+        counter = 0
+        i=0
+        while i<99
+            if size<=BodySize(updated_last_candle , tf)
+                return counter
+            end
+            counter = counter+1
+            i = i+1
+            updated_last_candle = FindLastCandle(updated_last_candle,tf)
+        end
+        return 100
+    end
+
+    function CountMarabuzos(index::Int , tf=M1::TimeFrame)
+        if IsMarbuzo(index,tf)
+            if CandleColor(index,tf)==CandleColor(FindLastCandle(index,tf),tf)
+                return 1+CountMarabuzos(FindLastCandle(index,tf),tf)
+            end
+            return 1
+        end
+        return 0
+    end
+
+    function ThreeCandlePattern(index::Int , tf=M1::TimeFrame)
+        tempStr = ""
+        if (CandleColor(FindLastCandle(FindLastCandle(index , tf) , tf) , tf) == Green)
+            tempStr = string(tempStr , 'G')
+        elseif (CandleColor(FindLastCandle(FindLastCandle(index , tf) , tf) , tf) == Red)
+            tempStr = string(tempStr , 'R')
+        else
+            tempStr = string(tempStr , 'N')
+        end
+
+        if (CandleColor(FindLastCandle(index , tf) , tf) == Green)
+            tempStr = string(tempStr , 'G')
+        elseif (CandleColor(FindLastCandle(index , tf) , tf) == Red)
+            tempStr = string(tempStr , 'R')
+        else
+            tempStr = string(tempStr , 'N')
+        end
+
+        if (CandleColor(index , tf) == Green)
+            tempStr = string(tempStr , 'G')
+        elseif (CandleColor(index , tf) == Red)
+            tempStr = string(tempStr , 'R')
+        else
+            tempStr = string(tempStr , 'N')
+        end
+        return tempStr
+    end
+end
+
+begin # Indicators functions
+    function CreatePriceArr(tf=M1::TimeFrame )
+        index = nrow(h)
+        price_arr = []
+        for i in 1:nrow(h)
+            if IsCandle(i,tf)
+                push!(price_arr, h[i , I(tf)+3])
+            end
+            i=i+1
+        end
+        return price_arr
+    end
+
+    function CreatePriceArr(index::Int , arr_length::Int  , tf=M1::TimeFrame )
+        counter = 0
+        i=0
+        price_arr = []
+        while counter<arr_length
+            if IsCandle(index-i,tf)
+                counter = counter+1
+                push!(price_arr, h[index-i , I(tf)+3])
+            end
+            i=i+1
+        end
+        return reverse(price_arr)
+    end
+
+    function CreatePriceArr(index::Int , arr_length::Int  ,pricetype::Int ,  tf=M1::TimeFrame)
+        counter = 0
+        i=0
+        price_arr = []
+        while counter<arr_length
+            if IsCandle(index-i,tf)
+                counter = counter+1
+                push!(price_arr, h[index-i , I(tf)+pricetype])
+            end
+            i=i+1
+        end
+        return reverse(price_arr)
+    end
+
+    function SMA(index::Int , SMA_length=20::Int , tf=M1::TimeFrame)
+        close_arr = CreatePriceArr(index,SMA_length,tf)
+        return mean(close_arr)
+    end
+
+    function RSI(index::Int , rsi_length=14::Int , tf=M1::TimeFrame)
+        close_arr = CreatePriceArr(index,2*rsi_length,tf)
+        rsi_df = DataFrame( Index = 1:rsi_length*2  , Change = 0.0 , Gain = 0.0 , Loss = 0.0 , AVGgain = 0.0 , AVGloss = 0.0 , RS = 0.0 , RSI = 0.0 )
+        for i in 2:rsi_length*2 # first loop populate close and 1 cell calculations
+            rsi_df.Change[i]= close_arr[i] - close_arr[i-1]
+            rsi_df.Change[i]>0 ? rsi_df.Gain[i] = rsi_df.Change[i] : rsi_df.Loss[i] = -rsi_df.Change[i]
+        end
+        i=rsi_length+1
+        rsi_df.AVGgain[i]=mean(rsi_df.Gain[2:i])
+        rsi_df.AVGloss[i]=mean(rsi_df.Loss[2:i])
+        rsi_df.RS[i] = rsi_df.AVGgain[i] / rsi_df.AVGloss[i]
+        rsi_df.RSI[i] = 100 - 100/(1+rsi_df.RS[i])
+        for i in rsi_length+2:2*rsi_length # populate averages
+            rsi_df.AVGgain[i]=(13*rsi_df.AVGgain[i-1] + rsi_df.Gain[i])/14
+            rsi_df.AVGloss[i]=(13*rsi_df.AVGloss[i-1] + rsi_df.Loss[i])/14
+            rsi_df.RS[i] = rsi_df.AVGgain[i] / rsi_df.AVGloss[i]
+            rsi_df.RSI[i] = 100 - 100/(1+rsi_df.RS[i])
+        end
+        return Int(round(rsi_df.RSI[end]))
+    end
+
+    function PopulateRSIs()
+        PopulateRSI1M()
+        PopulateRSI5M()
+        PopulateRSI15M()
+        PopulateRSIH()
+        PopulateRSID()
+    end
+
+    function PopulateRSI1M()
+        o = 13/14
+        n = 1/14
+        close_arr = CreatePriceArr()
+        rsi_df = DataFrame( Index = 1:length(close_arr)  , U = 0.0 ,D = 0.0 ,AvgU = 0.0 ,AvgD = 0.0 , RS = 0.0 )
+        for i in 2:length(close_arr) # first loop populate close and 1 cell calculations
+            if close_arr[i] > close_arr[i-1]
+                rsi_df.U[i] = close_arr[i] - close_arr[i-1]
+            else
+                rsi_df.D[i] = close_arr[i-1] - close_arr[i]
+            end
+        end
+        i=15
+        rsi_df.AvgU[i] = mean(rsi_df.U[2:15])
+        rsi_df.AvgD[i] = mean(rsi_df.D[2:15])
+        rsi_df.RS[i] = rsi_df.AvgU[i] / rsi_df.AvgD[i]
+        h.RSI[i] = Int(round(100 - 100/(1+rsi_df.RS[i])))
+
+        for i in 16:length(close_arr) # U and D
+            rsi_df.AvgU[i] = n*rsi_df.U[i] + o*rsi_df.AvgU[i-1]
+            rsi_df.AvgD[i] = n*rsi_df.D[i] + o*rsi_df.AvgD[i-1]
+            rsi_df.RS[i] = rsi_df.AvgU[i] / rsi_df.AvgD[i]
+            h.RSI[i] = Int(round(100 - 100/(1+rsi_df.RS[i])))
+        end
+    end
+
+    function PopulateRSI5M()
+        Change = [0.0]
+        Gain =[0.0]
+        Loss = [0.0]
+        AVGgain = [0.0]
+        AVGloss = [0.0]
+        RS = [0.0]
+        i = 1
+        last_candle = 1
+        loop = true
+        while loop
+            if IsCandle(i , M5)
+                loop = false
+                last_candle = i
+            end
+            i=i+1
+        end
+        while length(Change)<15 # first loop populate cell calculations and regular avreges
+            if IsCandle(i , M5)
+                push!(Change , h.Close5[i] - h.Close5[last_candle])
+                push!(Gain , 0.0)
+                push!(Loss , 0.0)
+                Change[end]>0 ? Gain[end] = Change[end] : Loss[end] = -Change[end]
+                last_candle = i
+            end
+            i=i+1
+        end
+
+        loop = true
+        while loop
+            if IsCandle(i , M5)
+                push!(Change , h.Close5[i] - h.Close5[last_candle])
+                push!(Gain , 0.0)
+                push!(Loss , 0.0)
+                Change[end]>0 ? Gain[end] = Change[end] : Loss[end] = -Change[end]
+                push!(AVGgain , mean(Gain[2:end]))
+                push!(AVGloss , mean(Loss[2:end]))
+                push!(RS , AVGgain[end] / AVGloss[end] )
+                RS[end]==0 ? h.RSI5M[i] = 100 : h.RSI5M[i] = Int(round(100 - 100/(1+RS[end])))
+                loop = false
+                last_candle = i
+            end
+            i=i+1
+        end
+
+        while i<nrow(h)
+            if IsCandle(i , M5)
+                push!(Change , h.Close5[i] - h.Close5[last_candle])
+                push!(Gain , 0.0)
+                push!(Loss , 0.0)
+                Change[end]>0 ? Gain[end] = Change[end] : Loss[end] = -Change[end]
+                push!(AVGgain , (13*AVGgain[end]/14 + Gain[end]/14))
+                push!(AVGloss , (13*AVGloss[end]/14 + Loss[end]/14))
+                push!(RS , AVGgain[end] / AVGloss[end] )
+                h.RSI5M[i] = Int(round(100 - 100/(1+RS[end])))
+                last_candle = i
+            else
+                h.RSI5M[i] = h.RSI5M[i-1]
+            end
+            i=i+1
+        end
+    end
+
+    function PopulateRSI15M()
+        Change = [0.0]
+        Gain =[0.0]
+        Loss = [0.0]
+        AVGgain = [0.0]
+        AVGloss = [0.0]
+        RS = [0.0]
+        i = 1
+        last_candle = 1
+        loop = true
+        while loop
+            if IsCandle(i , M15)
+                loop = false
+                last_candle = i
+            end
+            i=i+1
+        end
+        while length(Change)<15 # first loop populate cell calculations and regular avreges
+            if IsCandle(i , M15)
+                push!(Change , h.Close15[i] - h.Close15[last_candle])
+                push!(Gain , 0.0)
+                push!(Loss , 0.0)
+                Change[end]>0 ? Gain[end] = Change[end] : Loss[end] = -Change[end]
+                last_candle = i
+            end
+            i=i+1
+        end
+
+        loop = true
+        while loop
+            if IsCandle(i , M15)
+                push!(Change , h.Close15[i] - h.Close15[last_candle])
+                push!(Gain , 0.0)
+                push!(Loss , 0.0)
+                Change[end]>0 ? Gain[end] = Change[end] : Loss[end] = -Change[end]
+                push!(AVGgain , mean(Gain[2:end]))
+                push!(AVGloss , mean(Loss[2:end]))
+                push!(RS , AVGgain[end] / AVGloss[end] )
+                RS[end]==0 ? h.RSI15M[i] = 100 : h.RSI15M[i] = Int(round(100 - 100/(1+RS[end])))
+                loop = false
+                last_candle = i
+            end
+            i=i+1
+        end
+
+        while i<nrow(h)
+            if IsCandle(i , M15)
+                push!(Change , h.Close15[i] - h.Close15[last_candle])
+                push!(Gain , 0.0)
+                push!(Loss , 0.0)
+                Change[end]>0 ? Gain[end] = Change[end] : Loss[end] = -Change[end]
+                push!(AVGgain , (13*AVGgain[end]/14 + Gain[end]/14))
+                push!(AVGloss , (13*AVGloss[end]/14 + Loss[end]/14))
+                push!(RS , AVGgain[end] / AVGloss[end] )
+                RS[end]==0 ? h.RSI15M[i] = 100 : h.RSI15M[i] = Int(round(100 - 100/(1+RS[end])))
+                last_candle = i
+            else
+                h.RSI15M[i] = h.RSI15M[i-1]
+            end
+            i=i+1
+        end
+    end
+
+    function PopulateRSIH()
+        Change = [0.0]
+        Gain =[0.0]
+        Loss = [0.0]
+        AVGgain = [0.0]
+        AVGloss = [0.0]
+        RS = [0.0]
+        i = 1
+        last_candle = 1
+        loop = true
+        while loop
+            if IsCandle(i , H1)
+                loop = false
+                last_candle = i
+            end
+            i=i+1
+        end
+        while length(Change)<15 # first loop populate cell calculations and regular avreges
+            if IsCandle(i , H1)
+                push!(Change , h.CloseH[i] - h.CloseH[last_candle])
+                push!(Gain , 0.0)
+                push!(Loss , 0.0)
+                Change[end]>0 ? Gain[end] = Change[end] : Loss[end] = -Change[end]
+                last_candle = i
+            end
+            i=i+1
+        end
+
+        loop = true
+        while loop
+            if IsCandle(i , H1)
+                push!(Change , h.CloseH[i] - h.CloseH[last_candle])
+                push!(Gain , 0.0)
+                push!(Loss , 0.0)
+                Change[end]>0 ? Gain[end] = Change[end] : Loss[end] = -Change[end]
+                push!(AVGgain , mean(Gain[2:end]))
+                push!(AVGloss , mean(Loss[2:end]))
+                push!(RS , AVGgain[end] / AVGloss[end] )
+                RS[end]==0 ? h.RSIH[i] = 100 : h.RSIH[i] = Int(round(100 - 100/(1+RS[end])))
+                loop = false
+                last_candle = i
+            end
+            i=i+1
+        end
+
+        while i<nrow(h)
+            if IsCandle(i , H1)
+                push!(Change , h.CloseH[i] - h.CloseH[last_candle])
+                push!(Gain , 0.0)
+                push!(Loss , 0.0)
+                Change[end]>0 ? Gain[end] = Change[end] : Loss[end] = -Change[end]
+                push!(AVGgain , (13*AVGgain[end]/14 + Gain[end]/14))
+                push!(AVGloss , (13*AVGloss[end]/14 + Loss[end]/14))
+                push!(RS , AVGgain[end] / AVGloss[end] )
+                RS[end]==0 ? h.RSIH[i] = 100 : h.RSIH[i] = Int(round(100 - 100/(1+RS[end])))
+                last_candle = i
+            else
+                h.RSIH[i] = h.RSIH[i-1]
+            end
+            i=i+1
+        end
+    end
+
+    function PopulateRSID()
+        Change = [0.0]
+        Gain =[0.0]
+        Loss = [0.0]
+        AVGgain = [0.0]
+        AVGloss = [0.0]
+        RS = [0.0]
+        i = 1
+        last_candle = 1
+        loop = true
+        while loop
+            if IsCandle(i , D1)
+                loop = false
+                last_candle = i
+            end
+            i=i+1
+        end
+        while length(Change)<15 # first loop populate cell calculations and regular avreges
+            if IsCandle(i , D1)
+                push!(Change , h.CloseD[i] - h.CloseD[last_candle])
+                push!(Gain , 0.0)
+                push!(Loss , 0.0)
+                Change[end]>0 ? Gain[end] = Change[end] : Loss[end] = -Change[end]
+                last_candle = i
+            end
+            i=i+1
+        end
+
+        loop = true
+        while loop
+            if IsCandle(i , D1)
+                push!(Change , h.CloseD[i] - h.CloseD[last_candle])
+                push!(Gain , 0.0)
+                push!(Loss , 0.0)
+                Change[end]>0 ? Gain[end] = Change[end] : Loss[end] = -Change[end]
+                push!(AVGgain , mean(Gain[2:end]))
+                push!(AVGloss , mean(Loss[2:end]))
+                push!(RS , AVGgain[end] / AVGloss[end] )
+                RS[end]==0 ? h.RSID[i] = 100 : h.RSID[i] = Int(round(100 - 100/(1+RS[end])))
+                loop = false
+                last_candle = i
+            end
+            i=i+1
+        end
+
+        while i<nrow(h)
+            if IsCandle(i , D1)
+                push!(Change , h.CloseD[i] - h.CloseD[last_candle])
+                push!(Gain , 0.0)
+                push!(Loss , 0.0)
+                Change[end]>0 ? Gain[end] = Change[end] : Loss[end] = -Change[end]
+                push!(AVGgain , (13*AVGgain[end]/14 + Gain[end]/14))
+                push!(AVGloss , (13*AVGloss[end]/14 + Loss[end]/14))
+                push!(RS , AVGgain[end] / AVGloss[end] )
+                RS[end]==0 ? h.RSID[i] = 100 : h.RSID[i] = Int(round(100 - 100/(1+RS[end])))
+                last_candle = i
+            else
+                h.RSID[i] = h.RSID[i-1]
+            end
+            i=i+1
+        end
+    end
+
+    function ATR(index::Int , ATR_length=14::Int , tf=M1::TimeFrame)
+        close_arr = CreatePriceArr(index , ATR_length+1 , tf)
+        high_arr = CreatePriceArr(index,ATR_length+1,1,tf )
+        low_arr = CreatePriceArr(index,ATR_length+1,2,tf)
+        tr =  []
+        for i in 2:ATR_length+1
+            push!(tr , max(high_arr[i] - low_arr[i] ,max(high_arr[i]-close_arr[i-1] , close_arr[i-1] -low_arr[i] )))
+        end
+        atr = mean(tr[1:end])
+        return Int(round(atr/pip))
+    end
+end
+
+begin # Initialize DB functions
+    function LoadData()
+        history_path = "C:/Users/rgeyzer/AppData/Roaming/MetaQuotes/Terminal/D0E8209F77C8CF37AD8BF550E51FF075/MQL5/Files/History (MetaQuotes-Demo)/"
+        user_input_pair = "EURUSD"
+        pip = 0.0001
+        user_input_tf = "M1"
+        a = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+        temp = DataFrame(i = 1:nrow(a) , Date = a[:,1], Time = a[:,2] , Hour = 0 ,  Open = a[:,3], High = a[:,4], Low = a[:,5], Close = a[:,6], Volume = a[:,7]
+                                                                ,Open5 = 0.0,   High5 = 0.0,   Low5 = 0.0,   Close5 = 0.0
+                                                                ,Open15 = 0.0,  High15 = 0.0,  Low15 = 0.0,  Close15 = 0.0
+                                                                ,OpenH = 0.0,   HighH = 0.0,   LowH = 0.0,   CloseH = 0.0
+                                                                ,OpenD = 0.0,   HighD = 0.0,   LowD = 0.0,   CloseD = 0.0,
+            V20 = 0.0, V50 = 0.0, V100 = 0.0, V200 = 0.0, V1K = 0.0, V2K = 0.0 , MaxV2K = 0.0, MinV2K = 0.0, V5K = 0.0, V10K = 0.0, V20K = 0.0, MaxV20K = 0.0, MinV20K = 0.0,
+
+         Color = NoColor ,ThrClr = "" , ChngV = 0.0 , ChngP = 0.0 , BSize = 0.0 , CSize = 0.0 , Doji = false , Ham = false , InvHam = false , MornStar = false ,
+         HHLL = false , Engulf = false , Out = false , In = false, LastIn = 0 , BreakOutFrom = 0 , BodyBiggerThan = 0 , CandleBiggerThan = 0 , CountMarb = 0 ,
+         SMA20V = 0.0 , SMA20S = 0.0 , SMA20Di = 0 , SMA50V = 0.0 , SMAsDi = 0.0 , ATR = 0 , RSI = 0, RSIS = 0,
+
+         Color5M = NoColor,ThrClr5M = "" ,ChngV5M = 0.0 , ChngP5M = 0.0 , BSize5M = 0.0 , CSize5M = 0.0 , Doji5M = false , Ham5M = false , InvHam5M = false , MornStar5M = false ,
+         HHLL5M = false , Engulf5M = false , Out5M = false , In5M = false, LastIn5M = 0 , BreakOutFrom5M = 0 , BodyBiggerThan5M = 0 , CandleBiggerThan5M = 0 , CountMarb5M = 0 ,
+         SMA20V5M = 0.0 , SMA20S5M = 0.0 , SMA20Di5M = 0 , SMA50V5M = 0.0 , SMAsDi5M = 0.0 , ATR5M = 0 , RSI5M = 0, RSIS5M = 0,
+         #1M stats on 5M candles
+         CountGreen5M1M = 0, CountRed5M1M = 0, MaxChngV5M1M = 0.0, MaxChngP5M1M = 0.0, MaxBSize5M1M = 0.0, MaxCSize5M1M = 0.0 ,
+         CountDoji5M1M = 0, CountHam5M1M = 0, CountInvHam5M1M = 0, CountMornStar5M1M = 0, CountHHLL5M1M = 0 , CountEngulf5M1M = 0, CountOut5M1M = 0 , CountIn5M1M = 0 ,
+         MaxLastIn5M1M = 0, MaxBreakOutFrom5M1M = 0, MaxBodyBiggerThan5M1M = 0, MaxCandleBiggerThan5M1M = 0, MaxCountMarb5M1M = 0, MaxRSIS5M1M = 0, MinRSIS5M1M = 0,
+
+         Color15M= NoColor,ThrClr15M = "" ,ChngV15M = 0.0, ChngP15M = 0.0, BSize15M = 0.0, CSize15M = 0.0, Doji15M = false, Ham15M = false, InvHam15M = false, MornStar15M = false,
+         HHLL15M = false, Engulf15M = false, Out15M = false , In15M = false, LastIn15M = 0, BreakOutFrom15M = 0, BodyBiggerThan15M = 0, CandleBiggerThan15M = 0, CountMarb15M = 0,
+         SMA20V15M = 0.0 , SMA20S15M = 0.0 , SMA20Di15M = 0 , SMA50V15M = 0.0 , SMAsDi15M = 0.0 , ATR15M = 0 , RSI15M = 0, RSIS15M = 0,
+         #5M stats on 15M candles
+         CountGreen15M5M = 0, CountRed15M5M = 0, MaxChngV15M5M = 0.0, MaxChngP15M5M = 0.0, MaxBSize15M5M = 0.0, MaxCSize15M5M = 0.0 ,
+         CountDoji15M5M = 0, CountHam15M5M = 0, CountInvHam15M5M = 0, CountMornStar15M5M = 0, CountHHLL15M5M = 0 , CountEngulf15M5M = 0, CountOut15M5M = 0 , CountIn15M5M = 0 ,
+         MaxLastIn15M5M = 0, MaxBreakOutFrom15M5M = 0, MaxBodyBiggerThan15M5M = 0, MaxCandleBiggerThan15M5M = 0, MaxCountMarb15M5M = 0, MaxRSIS15M5M = 0, MinRSIS15M5M = 0,
+
+         ColorH = NoColor,ThrClrH = "" ,ChngVH = 0.0 , ChngPH = 0.0 , BSizeH = 0.0 , CSizeH = 0.0 , DojiH = false , HamH = false , InvHamH = false , MornStarH = false ,
+         HHLLH = false , EngulfH = false , OutH = false , InH = false, LastInH = 0 ,BreakOutFromH = 0 , BodyBiggerThanH = 0 , CandleBiggerThanH = 0 , CountMarbH = 0 ,
+         SMA20VH = 0.0 , SMA20SH = 0.0 , SMA20DiH = 0 , SMA50VH = 0.0 , SMAsDiH = 0.0 , ATRH = 0 , RSIH = 0,RSISH = 0,
+          #15M stats on 1H candles
+          CountGreenH15M = 0, CountRedH15M = 0, MaxChngVH15M = 0.0, MaxChngPH15M = 0.0, MaxBSizeH15M = 0.0, MaxCSizeH15M = 0.0 ,
+          CountDojiH15M = 0, CountHamH15M = 0, CountInvHamH15M = 0, CountMornStarH15M = 0, CountHHLLH15M = 0 , CountEngulfH15M = 0, CountOutH15M = 0 , CountInH15M = 0 ,
+          MaxLastInH15M = 0, MaxBreakOutFromH15M = 0, MaxBodyBiggerThanH15M = 0, MaxCandleBiggerThanH15M = 0, MaxCountMarbH15M = 0, MaxRSISH15M = 0, MinRSISH15M = 0,
+
+         ColorD = NoColor,ThrClrD = "" ,ChngVD = 0.0 , ChngPD = 0.0 , BSizeD = 0.0 , CSizeD = 0.0 , DojiD = false , HamD = false , InvHamD = false , MornStarD = false ,
+         HHLLD = false , EngulfD = false , OutD = false , InD = false, LastInD = 0 ,BreakOutFromD = 0 , BodyBiggerThanD = 0 , CandleBiggerThanD = 0 , CountMarbD = 0 ,
+         SMA20VD = 0.0 , SMA20SD = 0.0 , SMA20DiD = 0 , SMA50VD = 0.0 , SMAsDiD = 0.0 , ATRD = 0 , RSID = 0, RSISD = 0)
+         return temp
+    end
+    function Initialize5M()
+        loopsize = nrow(h) - 5
+        i=1
+        while i<=loopsize
+            if minute(h.Time[i])%5 ==0 && minute(h.Time[i+4])%5 ==4
+                h.Open5[i] = h.Open[i]
+                h.High5[i] = maximum(h.High[i:i+4])
+                h.Low5[i] = minimum(h.Low[i:i+4])
+                h.Close5[i] = h.Close[i+4]
+                i=i+5
+                continue
+            end
+            i=i+1
+        end
+    end
+
+    function Initialize15M()
+        loopsize = nrow(h) - 15
+        i=1
+        while i<=loopsize
+            if minute(h.Time[i])%15 ==0 && minute(h.Time[i+14])%15 ==14
+                h.Open15[i] = h.Open[i]
+                h.High15[i] = maximum(h.High[i:i+14])
+                h.Low15[i] = minimum(h.Low[i:i+14])
+                h.Close15[i] = h.Close[i+14]
+                i=i+15
+                continue
+            end
+            i=i+1
+        end
+    end
+
+    function InitializeH()
+        loopsize = nrow(h) - 61
+        i=2
+        while i<=loopsize
+            if hour(h.Time[i])!= hour(h.Time[i-1])
+                j=60
+                looper =true
+                while looper && j>55
+                    if hour(h.Time[i+j+1])!= hour(h.Time[i+j])
+                        h.OpenH[i] = h.Open[i]
+                        h.HighH[i] = maximum(h.High[i:i+j])
+                        h.LowH[i] = minimum(h.Low[i:i+j])
+                        h.CloseH[i] = h.Close[i+j]
+                        looper = false
+                    end
+                    j=j-1
+                end
+                i=i+55
+                continue
+            end
+            i=i+1
+        end
+    end
+
+    function InitializeD()
+        loopsize = nrow(h) - 1500
+        i=2
+        while i<=loopsize
+            if h.Date[i][end-1:end]!= h.Date[i-1][end-1:end]
+
+                j=1440
+                looper =true
+                while looper && j>1300
+                    if h.Date[i+j+1][end-1:end]!= h.Date[i+j][end-1:end]
+                        h.OpenD[i] = h.Open[i]
+                        h.HighD[i] = maximum(h.High[i:i+j])
+                        h.LowD[i] = minimum(h.Low[i:i+j])
+                        h.CloseD[i] = h.Close[i+j]
+                        looper = false
+                    end
+                    j=j-1
+                end
+                i=i+1300
+                continue
+            end
+            i=i+1
+        end
+    end
+
+    function PopulateM1()
+        #previous candle SMA - required to keep "di's in check"
+        h.SMA20V[104] = SMA(104)
+        h.SMA50V[104] = SMA(104 , 50)
+        for i in 105:nrow(h)-history_reduction
+            h.Hour[i] = hour(h.Time[i])
+
+            h.V20[i] = Int(round((h.Close[i+20]-h.Close[i])/pip))
+            h.V50[i] = Int(round((h.Close[i+50]-h.Close[i])/pip))
+            h.V100[i] = Int(round((h.Close[i+100]-h.Close[i])/pip))
+            h.V200[i] = Int(round((h.Close[i+200]-h.Close[i])/pip))
+            h.V1K[i] = Int(round((h.Close[i+1000]-h.Close[i])/pip))
+            h.V2K[i] = Int(round((h.Close[i+2000]-h.Close[i])/pip))
+            h.MaxV2K[i] = Int(round((maximum(h.High[i:i+2000])-h.Close[i])/pip))
+            h.MinV2K[i] = Int(round((minimum(h.Low[i:i+2000])-h.Close[i])/pip))
+            h.V5K[i] = Int(round((h.Close[i+5000]-h.Close[i])/pip))
+            h.V10K[i] = Int(round((h.Close[i+10000]-h.Close[i])/pip))
+            h.V20K[i] = Int(round((h.Close[i+20000]-h.Close[i])/pip))
+            h.MaxV20K[i] = Int(round((maximum(h.High[i:i+20000])-h.Close[i])/pip))
+            h.MinV20K[i] = Int(round((minimum(h.Low[i:i+20000])-h.Close[i])/pip))
+
+            h.Color[i] = CandleColor(i)
+            h.ThrClr[i] = ThreeCandlePattern(i)
+            h.ChngV[i] = round((h.Close[i] - h.Open[i])/pip; digits = 1)
+            h.ChngP[i] = round(100*(h.Close[i] / h.Open[i] - 1); digits = 1)
+            h.BSize[i] = BodySize(i)
+            h.CSize[i] = CandleSize(i)
+            h.Doji[i] = IsDoji(i)
+            h.Ham[i] = IsHammer(i)
+            h.InvHam[i] = IsInvHammer(i)
+            h.MornStar[i] = IsMorningStar(i)
+            h.HHLL[i] = HHHCLLLC(i)
+            h.Engulf[i] = Engulfing(i)
+            h.Out[i] = OutsideBar(i)
+            h.In[i] = InsideBar(i)
+            h.LastIn[i] = LastInsideBar(i)
+            h.BreakOutFrom[i] = BreakoutFromLastXCandles(i)
+            h.BodyBiggerThan[i] = CountBiggerBodyThanX(i)
+            h.CandleBiggerThan[i] = CountBiggerCandleThanX(i)
+            h.CountMarb[i] = CountMarabuzos(i)
+            h.SMA20V[i] = SMA(i)
+            h.SMA20S[i] = round((h.SMA20V[i] - h.SMA20V[i-1])/pip; digits = 1)
+            h.SMA20Di[i] = Int(round((h.Open[i] - h.SMA20V[i])/pip))
+            h.SMA50V[i] = SMA(i , 50)
+            h.SMAsDi[i] = round((h.SMA20V[i] - h.SMA50V[i])/pip; digits = 1)
+            h.ATR[i] = ATR(i)
+            h.RSIS[i] = h.RSI[i] - h.RSI[i-1]
+        end
+    end
+
+    function PopulateM5()
+        #previous candle SMA - required to keep "di's in check"
+        LastC = FindLastCandle(601,M5)
+        h.SMA20V5M[LastC] = SMA(LastC,20,M5)
+        h.SMA50V5M[LastC] = SMA(LastC,50,M5)
+        for i in 601:nrow(h)-history_reduction
+            if IsCandle(i , M5)
+                LastC = FindLastCandle(i,M5)
+                h.Color5M[i] = CandleColor(i , M5)
+                h.ThrClr5M[i] = ThreeCandlePattern(i , M5)
+                h.ChngV5M[i] = round((h.Close5[i] - h.Open5[i])/pip; digits = 1)
+                h.ChngP5M[i] = round(100*(h.Close5[i] / h.Open5[i] - 1); digits = 1)
+                h.BSize5M[i] = BodySize(i, M5)
+                h.CSize5M[i] = CandleSize(i , M5)
+                h.Doji5M[i] = IsDoji(i , M5)
+                h.Ham5M[i] = IsHammer(i , M5)
+                h.InvHam5M[i] = IsInvHammer(i , M5)
+                h.MornStar5M[i] = IsMorningStar(i , M5)
+                h.HHLL5M[i] = HHHCLLLC(i , M5)
+                h.Engulf5M[i] = Engulfing(i , M5)
+                h.Out5M[i] = OutsideBar(i , M5)
+                h.In5M[i] = InsideBar(i , M5)
+                h.LastIn5M[i] = LastInsideBar(i , M5)
+                h.BreakOutFrom5M[i] = BreakoutFromLastXCandles(i , M5)
+                h.BodyBiggerThan5M[i] = CountBiggerBodyThanX(i , M5)
+                h.CandleBiggerThan5M[i] = CountBiggerCandleThanX(i , M5)
+                h.CountMarb5M[i] = CountMarabuzos(i , M5)
+                h.SMA20V5M[i] = SMA(i,20,M5)
+                h.SMA20S5M[i] = round((h.SMA20V5M[i] - h.SMA20V5M[LastC])/pip; digits = 1)
+                h.SMA20Di[i] = Int(round((h.Open5[i] - h.SMA20V5M[i])/pip))
+                h.SMA50V5M[i] = SMA(i,50,M5)
+                h.SMAsDi5M[i] = round((h.SMA20V5M[i] - h.SMA50V5M[i])/pip; digits = 1)
+                h.ATR5M[i] = ATR(i , 14 , M5)
+                h.RSIS5M[i] = h.RSI5M[i] - h.RSI5M[LastC]
+                tempArr = [FindLastCandle(FindLastCandle(i , M5))]
+                for k in LastC+1:i # for all the count col (requires count if condition)
+                    if h.Color[k] == Green
+                        h.CountGreen5M1M[i] +=1
+                    elseif h.Color[k] == Red
+                        h.CountRed5M1M[i] +=1
+                    end
+                    if h.Doji[k]
+                        h.CountDoji5M1M[i] +=1
+                    end
+                    if h.Ham[k]
+                        h.CountHam5M1M[i] +=1
+                    end
+                    if h.InvHam[k]
+                        h.CountInvHam5M1M[i] +=1
+                    end
+                    if h.MornStar[k]
+                        h.CountMornStar5M1M[i] +=1
+                    end
+                    if h.HHLL[k]
+                        h.CountHHLL5M1M[i] +=1
+                    end
+                    if h.Engulf[k]
+                        h.CountEngulf5M1M[i] +=1
+                    end
+                    if h.Out[k]
+                        h.CountOut5M1M[i] +=1
+                    end
+                    if h.In[k]
+                        h.CountIn5M1M[i] +=1
+                    end
+                end
+                h.MaxChngV5M1M[i] = maximum(h.ChngV[LastC+1:i])
+                h.MaxChngP5M1M[i] = maximum(h.ChngP[LastC+1:i])
+                h.MaxBSize5M1M[i] = maximum(h.BSize[LastC+1:i])
+                h.MaxCSize5M1M[i] = maximum(h.CSize[LastC+1:i])
+                h.MaxLastIn5M1M[i] = maximum(h.LastIn[LastC+1:i])
+                h.MaxBreakOutFrom5M1M[i] = maximum(h.BreakOutFrom[LastC+1:i])
+                h.MaxBodyBiggerThan5M1M[i] = maximum(h.BodyBiggerThan[LastC+1:i])
+                h.MaxCandleBiggerThan5M1M[i] = maximum(h.CandleBiggerThan[LastC+1:i])
+                h.MaxCountMarb5M1M[i] = maximum(h.CountMarb[LastC+1:i])
+                h.MaxRSIS5M1M[i] = maximum(h.RSIS[LastC+1:i])
+                h.MinRSIS5M1M[i] = minimum(h.RSIS[LastC+1:i])
+            else
+                j=1
+                for column in names(h)
+                    if 65 < j < 114
+                        h[i , column] = h[i-1 , column]
+                    end
+                    j +=1
+                end
+            end
+        end
+    end
+
+    function PopulateM15()
+        #previous candle SMA - required to keep "di's in check"
+        LastC = FindLastCandle(2001,M15)
+        h.SMA20V15M[LastC] = SMA(LastC,20,M15)
+        h.SMA50V15M[LastC] = SMA(LastC,50,M15)
+        for i in 2001:nrow(h)-history_reduction
+            if IsCandle(i , M15)
+                LastC = FindLastCandle(i,M15)
+                h.Color15M[i] = CandleColor(i , M15)
+                h.ThrClr15M[i] = ThreeCandlePattern(i , M15)
+                h.ChngV15M[i] = round((h.Close15[i] - h.Open15[i])/pip; digits = 1)
+                h.ChngP15M[i] = round(100*(h.Close15[i] / h.Open15[i] - 1); digits = 1)
+                h.BSize15M[i] = BodySize(i, M15)
+                h.CSize15M[i] = CandleSize(i , M15)
+                h.Doji15M[i] = IsDoji(i , M15)
+                h.Ham15M[i] = IsHammer(i , M15)
+                h.InvHam15M[i] = IsInvHammer(i , M15)
+                h.MornStar15M[i] = IsMorningStar(i , M15)
+                h.HHLL15M[i] = HHHCLLLC(i , M15)
+                h.Engulf15M[i] = Engulfing(i , M15)
+                h.Out15M[i] = OutsideBar(i , M15)
+                h.In15M[i] = InsideBar(i , M15)
+                h.LastIn15M[i] = LastInsideBar(i , M15)
+                h.BreakOutFrom15M[i] = BreakoutFromLastXCandles(i , M15)
+                h.BodyBiggerThan15M[i] = CountBiggerBodyThanX(i , M15)
+                h.CandleBiggerThan15M[i] = CountBiggerCandleThanX(i , M15)
+                h.CountMarb15M[i] = CountMarabuzos(i , M15)
+                h.SMA20V15M[i] = SMA(i,20,M15)
+                h.SMA20S15M[i] = round((h.SMA20V15M[i] - h.SMA20V15M[LastC])/pip; digits = 1)
+                h.SMA20Di15M[i] = Int(round((h.Open15[i] - h.SMA20V15M[i])/pip))
+                h.SMA50V15M[i] = SMA(i,50,M15)
+                h.SMAsDi15M[i] = round((h.SMA20V15M[i] - h.SMA50V15M[i])/pip; digits = 1)
+                h.ATR15M[i] = ATR(i , 14 , M15)
+                h.RSIS15M[i] = h.RSI15M[i] - h.RSI15M[LastC]
+                tempArr = [FindLastCandle(FindLastCandle(LastC , M5),M5) ,FindLastCandle(LastC , M5) , LastC ]
+                for k in tempArr # for all the count col (requires count if condition)
+                    if h.Color5M[k] == Green
+                        h.CountGreen15M5M[i] +=1
+                    elseif h.Color5M[k] == Red
+                        h.CountRed15M5M[i] +=1
+                    end
+                    if h.Doji5M[k]
+                        h.CountDoji15M5M[i] +=1
+                    end
+                    if h.Ham5M[k]
+                        h.CountHam15M5M[i] +=1
+                    end
+                    if h.InvHam5M[k]
+                        h.CountInvHam15M5M[i] +=1
+                    end
+                    if h.MornStar5M[k]
+                        h.CountMornStar15M5M[i] +=1
+                    end
+                    if h.HHLL5M[k]
+                        h.CountHHLL15M5M[i] +=1
+                    end
+                    if h.Engulf5M[k]
+                        h.CountEngulf15M5M[i] +=1
+                    end
+                    if h.Out5M[k]
+                        h.CountOut15M5M[i] +=1
+                    end
+                    if h.In5M[k]
+                        h.CountIn15M5M[i] +=1
+                    end
+                end
+                h.MaxChngV15M5M[i] = maximum(h.ChngV5M[tempArr[1:end]])
+                h.MaxChngP15M5M[i] = maximum(h.ChngP5M[tempArr[1:end]])
+                h.MaxBSize15M5M[i] = maximum(h.BSize5M[tempArr[1:end]])
+                h.MaxCSize15M5M[i] = maximum(h.CSize5M[tempArr[1:end]])
+                h.MaxLastIn15M5M[i] = maximum(h.LastIn5M[tempArr[1:end]])
+                h.MaxBreakOutFrom15M5M[i] = maximum(h.BreakOutFrom5M[tempArr[1:end]])
+                h.MaxBodyBiggerThan15M5M[i] = maximum(h.BodyBiggerThan5M[tempArr[1:end]])
+                h.MaxCandleBiggerThan15M5M[i] = maximum(h.CandleBiggerThan5M[tempArr[1:end]])
+                h.MaxCountMarb15M5M[i] = maximum(h.CountMarb5M[tempArr[1:end]])
+                h.MaxRSIS15M5M[i] = maximum(h.RSIS5M[tempArr[1:end]])
+                h.MinRSIS15M5M[i] = minimum(h.RSIS5M[tempArr[1:end]])
+            else
+                j=1
+                for column in names(h)
+                    if 113 < j < 162
+                        h[i , column] = h[i-1 , column]
+                    end
+                    j +=1
+                end
+            end
+        end
+    end
+
+    function PopulateH1()
+        #previous candle SMA - required to keep "di's in check"
+        LastC = FindLastCandle(10001,H1)
+        h.SMA20VH[LastC] = SMA(LastC,20,H1)
+        h.SMA50VH[LastC] = SMA(LastC,50,H1)
+        for i in 10001:nrow(h)-history_reduction
+            if IsCandle(i , H1)
+                LastC = FindLastCandle(i,H1)
+                h.ColorH[i] = CandleColor(i , H1)
+                h.ThrClrH[i] = ThreeCandlePattern(i , H1)
+                h.ChngVH[i] = round((h.CloseH[i] - h.OpenH[i])/pip; digits = 1)
+                h.ChngPH[i] = round(100*(h.CloseH[i] / h.OpenH[i] - 1); digits = 1)
+                h.BSizeH[i] = BodySize(i, H1)
+                h.CSizeH[i] = CandleSize(i , H1)
+                h.DojiH[i] = IsDoji(i , H1)
+                h.HamH[i] = IsHammer(i , H1)
+                h.InvHamH[i] = IsInvHammer(i , H1)
+                h.MornStarH[i] = IsMorningStar(i , H1)
+                h.HHLLH[i] = HHHCLLLC(i , H1)
+                h.EngulfH[i] = Engulfing(i , H1)
+                h.OutH[i] = OutsideBar(i , H1)
+                h.InH[i] = InsideBar(i , H1)
+                h.LastInH[i] = LastInsideBar(i , H1)
+                h.BreakOutFromH[i] = BreakoutFromLastXCandles(i , H1)
+                h.BodyBiggerThanH[i] = CountBiggerBodyThanX(i , H1)
+                h.CandleBiggerThanH[i] = CountBiggerCandleThanX(i , H1)
+                h.CountMarbH[i] = CountMarabuzos(i , H1)
+                h.SMA20VH[i] = SMA(i,20,H1)
+                h.SMA20SH[i] = round((h.SMA20VH[i] - h.SMA20VH[LastC])/pip; digits = 1)
+                h.SMA20DiH[i] = Int(round((h.OpenH[i] - h.SMA20VH[i])/pip))
+                h.SMA50VH[i] = SMA(i,50,H1)
+                h.SMAsDiH[i] = round((h.SMA20VH[i] - h.SMA50VH[i])/pip; digits = 1)
+                h.ATRH[i] = ATR(i , 14 , H1)
+                h.RSISH[i] = h.RSIH[i] - h.RSIH[LastC]
+            else
+                j=1
+                for column in names(h)
+                    if 161 < j < 210
+                        h[i , column] = h[i-1 , column]
+                    end
+                    j +=1
+                end
+            end
+        end
+    end
+
+    function PopulateD1()
+        #previous candle SMA - required to keep "di's in check"
+        LastC = FindLastCandle(250001,D1)
+        h.SMA20VD[LastC] = SMA(LastC,20,D1)
+        h.SMA50VD[LastC] = SMA(LastC,50,D1)
+        for i in 250001:nrow(h)-history_reduction
+            if IsCandle(i , D1)
+                LastC = FindLastCandle(i,D1)
+                h.ColorD[i] = CandleColor(i , D1)
+                h.ThrClrD[i] = ThreeCandlePattern(i , D1)
+                h.ChngVD[i] = round((h.CloseD[i] - h.OpenD[i])/pip; digits = 1)
+                h.ChngPD[i] = round(100*(h.CloseD[i] / h.OpenD[i] - 1); digits = 1)
+                h.BSizeD[i] = BodySize(i, D1)
+                h.CSizeD[i] = CandleSize(i , D1)
+                h.DojiD[i] = IsDoji(i , D1)
+                h.HamD[i] = IsHammer(i , D1)
+                h.InvHamD[i] = IsInvHammer(i , D1)
+                h.MornStarD[i] = IsMorningStar(i , D1)
+                h.HHLLD[i] = HHHCLLLC(i , D1)
+                h.EngulfD[i] = Engulfing(i , D1)
+                h.OutD[i] = OutsideBar(i , D1)
+                h.InD[i] = InsideBar(i , D1)
+                h.LastInD[i] = LastInsideBar(i , D1)
+                h.BreakOutFromD[i] = BreakoutFromLastXCandles(i , D1)
+                h.BodyBiggerThanD[i] = CountBiggerBodyThanX(i , D1)
+                h.CandleBiggerThanD[i] = CountBiggerCandleThanX(i , D1)
+                h.CountMarbD[i] = CountMarabuzos(i , D1)
+                h.SMA20VD[i] = SMA(i,20,D1)
+                h.SMA20SD[i] = round((h.SMA20VD[i] - h.SMA20VD[LastC])/pip; digits = 1)
+                h.SMA20DiD[i] = Int(round((h.OpenD[i] - h.SMA20VD[i])/pip))
+                h.SMA50VD[i] = SMA(i,50,D1)
+                h.SMAsDiD[i] = round((h.SMA20VD[i] - h.SMA50VD[i])/pip; digits = 1)
+                h.ATRD[i] = ATR(i , 14 , D1)
+                h.RSISD[i] = h.RSID[i] - h.RSID[LastC]
+            else
+                for column in names(h)
+                    j=1
+                    if 209 < j
+                        h[i , column] = h[i-1 , column]
+                    end
+                    j +=1
+                end
+            end
+        end
+    end
+end
+
+ # run function for populate Indicators and calculation
+h=LoadData()
+Initialize5M()
+Initialize15M()
+InitializeH()
+InitializeD()
+PopulateRSIs()
+PopulateM1()
+PopulateM5()
+PopulateM15()
+PopulateH1()
+PopulateD1()
+
+CSV.write("C:/Users/rgeyzer/AppData/Roaming/MetaQuotes/Terminal/D0E8209F77C8CF37AD8BF550E51FF075/MQL5/Files/History (MetaQuotes-Demo)/testfile.csv" , h[end-120000:end-history_reduction,:])
+
+for i in 1:50
+    println("*********")
+end
+
+j=1
+for column in names(h)
+    println(j , " - " , column)
+    j +=1
+end
+
+
+for i in 1:5
+    println("*********")
+end
+
+println(describe(h))
+
+for i in 1:5
+    println("*********")
+end
+
+
+println("returned the create data frame function - need to check still works")
+println("created col for 15M to 5M - need to validate all data ")
+println("review decribe h and validate all data - see exmaple of extreme value in SAM20S (for all tf's) - something's wrong ")
+println("next steps: ")
+println("3. add 1H to 15M - same logic as 15 to 5")
+println("4. redo numbers of col of DB in inner for loop using J (col numbers will shift due to new col)")
+println("5. test entire DB (15M to 5M , 1H to 15M)")
+for i in 1:5
+    println("*********")
+end
+println("final step - start running stats (begin with GGG and RRR found on 1H time frame)")
+
+
+
+findmax(h.SMA20S5M )
+IsCandle(600 , M5)
+FindLastCandle(601,M5)
+LastC =
+h.SMA20V5M[LastC] = SMA(LastC,20,M5)
+h.SMA50V5M[LastC] = SMA(LastC,50,M5)
+#=
+maximum(h.SMA20S15M[1:end])
+findmax(h.SMA20S5M )
+
+
+
+IsCandle(100002 , M5)
+FindLastCandle(99997 , M5)
+tempArr = [FindLastCandle(FindLastCandle(100002 , M5),M5) ,FindLastCandle(100002 , M5) , 100002 ]
+for i in tempArr
+    println(h.ChngV[i])
+end
+
+minimum(h.ChngV[tempArr[1:end]])
+=#

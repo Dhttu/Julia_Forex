@@ -1,0 +1,86 @@
+
+
+using CSV
+using DataFrames
+using Statistics
+using Dates
+
+
+
+history_path = "C:/Users/rgeyzer/AppData/Roaming/MetaQuotes/Terminal/D0E8209F77C8CF37AD8BF550E51FF075/MQL5/Files/History (MetaQuotes-Demo)/"
+user_input_pair = "EURUSD"
+
+user_input_tf = "M1"
+a = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+heder= ["Date" , "Time", "Open" , "High" , "Low"  , "Close" , "Volume"]
+rename!(a , heder)
+
+user_input_tf = "M5"
+b = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+heder= ["Date" , "Time", "Open5" , "High5" , "Low5"  , "Close5" , "Volume5"]
+rename!(b , heder)
+
+user_input_tf = "M15"
+c = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+heder= ["Date" , "Time", "Open15" , "High15" , "Low15"  , "Close15" , "Volume15"]
+rename!(c , heder)
+
+user_input_tf = "H1"
+d = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+heder= ["Date" , "Time", "OpenH" , "HighH" , "LowH"  , "CloseH" , "VolumeH"]
+rename!(d , heder)
+
+user_input_tf = "D1"
+e = CSV.read(string(history_path ,user_input_pair ,user_input_tf, ".csv") , DataFrame)
+heder= ["Date" , "Time", "OpenD" , "HighD" , "LowD"  , "CloseD" , "VolumeD"]
+rename!(e , heder)
+
+w = DataFrame(leftjoin(a,b, on = [:"Date", :"Time"]))
+x = DataFrame(leftjoin(w,c, on = [:"Date", :"Time"]))
+y = DataFrame(leftjoin(d,e, on = [:"Date", :"Time"]))
+z = DataFrame(leftjoin(x,y, on = [:"Date", :"Time"]))
+
+
+println(z[10000:10010 , :])
+
+CSV.write("C:/Users/rgeyzer/AppData/Roaming/MetaQuotes/Terminal/D0E8209F77C8CF37AD8BF550E51FF075/MQL5/Files/History (MetaQuotes-Demo)/testfile.csv" , z[end-12000:end,:])
+
+
+temp = DataFrame(i = 1:nrow(z) , Date = z[:,1], Time = z[:,2] , Hour = 0 ,  Open = z[:,3], High = z[:,4], Low = z[:,5], Close = z[:,6], Volume = z[:,7]
+                                                        ,Open5 = z[:,8],   High5 = z[:,9],   Low5 = z[:,10],   Close5 = z[:,11], Volume5 = z[:,12]
+                                                        ,Open15 = z[:,13],  High15 = z[:,14],  Low15 = z[:,15],  Close15 = z[:,16], Volume15 = z[:,17]
+                                                        ,OpenH = z[:,18],   HighH = z[:,19],   LowH = z[:,20],   CloseH = z[:,21], VolumeH = z[:,22]
+                                                        ,OpenD = z[:,23],   HighD = z[:,24],   LowD = z[:,25],   CloseD = z[:,26], VolumeD = z[:,27]
+        V20 = 0.0, V50 = 0.0, V100 = 0.0, V200 = 0.0, V1K = 0.0, V2K = 0.0 , MaxV2K = 0.0, MinV2K = 0.0, V5K = 0.0, V10K = 0.0, V20K = 0.0, MaxV20K = 0.0, MinV20K = 0.0,
+
+        Color = NoColor ,ThrClr = "" , ChngV = 0.0 , ChngP = 0.0 , BSize = 0.0 , CSize = 0.0 , Doji = false , Ham = false , InvHam = false , MornStar = false ,
+        HHLL = false , Engulf = false , Out = false , In = false, LastIn = 0 , BreakOutFrom = 0 , BodyBiggerThan = 0 , CandleBiggerThan = 0 , CountMarb = 0 ,
+        SMA20V = 0.0 , SMA20S = 0.0 , SMA20Di = 0 , SMA50V = 0.0 , SMAsDi = 0.0 , ATR = 0 , RSI = 0, RSIS = 0,
+
+        Color5M = NoColor,ThrClr5M = "" ,ChngV5M = 0.0 , ChngP5M = 0.0 , BSize5M = 0.0 , CSize5M = 0.0 , Doji5M = false , Ham5M = false , InvHam5M = false , MornStar5M = false ,
+        HHLL5M = false , Engulf5M = false , Out5M = false , In5M = false, LastIn5M = 0 , BreakOutFrom5M = 0 , BodyBiggerThan5M = 0 , CandleBiggerThan5M = 0 , CountMarb5M = 0 ,
+        SMA20V5M = 0.0 , SMA20S5M = 0.0 , SMA20Di5M = 0 , SMA50V5M = 0.0 , SMAsDi5M = 0.0 , ATR5M = 0 , RSI5M = 0, RSIS5M = 0,
+    #1M stats on 5M candles
+        CountGreen5M1M = 0, CountRed5M1M = 0, MaxChngV5M1M = 0.0, MaxChngP5M1M = 0.0,MinChngV5M1M = 0.0, MinChngP5M1M = 0.0, MaxBSize5M1M = 0.0, MaxCSize5M1M = 0.0 ,
+        CountDoji5M1M = 0, CountHam5M1M = 0, CountInvHam5M1M = 0, CountMornStar5M1M = 0, CountHHLL5M1M = 0 , CountEngulf5M1M = 0, CountOut5M1M = 0 , CountIn5M1M = 0 ,
+        MaxLastIn5M1M = 0, MaxBreakOutFrom5M1M = 0, MaxBodyBiggerThan5M1M = 0, MaxCandleBiggerThan5M1M = 0, MaxCountMarb5M1M = 0, MaxRSIS5M1M = 0, MinRSIS5M1M = 0,
+
+        Color15M= NoColor,ThrClr15M = "" ,ChngV15M = 0.0, ChngP15M = 0.0, BSize15M = 0.0, CSize15M = 0.0, Doji15M = false, Ham15M = false, InvHam15M = false, MornStar15M = false,
+        HHLL15M = false, Engulf15M = false, Out15M = false , In15M = false, LastIn15M = 0, BreakOutFrom15M = 0, BodyBiggerThan15M = 0, CandleBiggerThan15M = 0, CountMarb15M = 0,
+        SMA20V15M = 0.0 , SMA20S15M = 0.0 , SMA20Di15M = 0 , SMA50V15M = 0.0 , SMAsDi15M = 0.0 , ATR15M = 0 , RSI15M = 0, RSIS15M = 0,
+    #5M stats on 15M candles
+        CountGreen15M5M = 0, CountRed15M5M = 0, MaxChngV15M5M = 0.0, MaxChngP15M5M = 0.0,MinChngV15M5M = 0.0, MinChngP15M5M = 0.0, MaxBSize15M5M = 0.0, MaxCSize15M5M = 0.0 ,
+        CountDoji15M5M = 0, CountHam15M5M = 0, CountInvHam15M5M = 0, CountMornStar15M5M = 0, CountHHLL15M5M = 0 , CountEngulf15M5M = 0, CountOut15M5M = 0 , CountIn15M5M = 0 ,
+        MaxLastIn15M5M = 0, MaxBreakOutFrom15M5M = 0, MaxBodyBiggerThan15M5M = 0, MaxCandleBiggerThan15M5M = 0, MaxCountMarb15M5M = 0, MaxRSIS15M5M = 0, MinRSIS15M5M = 0,
+
+        ColorH = NoColor,ThrClrH = "" ,ChngVH = 0.0 , ChngPH = 0.0 , BSizeH = 0.0 , CSizeH = 0.0 , DojiH = false , HamH = false , InvHamH = false , MornStarH = false ,
+        HHLLH = false , EngulfH = false , OutH = false , InH = false, LastInH = 0 ,BreakOutFromH = 0 , BodyBiggerThanH = 0 , CandleBiggerThanH = 0 , CountMarbH = 0 ,
+        SMA20VH = 0.0 , SMA20SH = 0.0 , SMA20DiH = 0 , SMA50VH = 0.0 , SMAsDiH = 0.0 , ATRH = 0 , RSIH = 0,RSISH = 0,
+     #15M stats on 1H candles
+        CountGreenH15M = 0, CountRedH15M = 0, MaxChngVH15M = 0.0, MaxChngPH15M = 0.0, MinChngVH15M = 0.0, MinChngPH15M = 0.0, MaxBSizeH15M = 0.0, MaxCSizeH15M = 0.0 ,
+        CountDojiH15M = 0, CountHamH15M = 0, CountInvHamH15M = 0, CountMornStarH15M = 0, CountHHLLH15M = 0 , CountEngulfH15M = 0, CountOutH15M = 0 , CountInH15M = 0 ,
+         MaxLastInH15M = 0, MaxBreakOutFromH15M = 0, MaxBodyBiggerThanH15M = 0, MaxCandleBiggerThanH15M = 0, MaxCountMarbH15M = 0, MaxRSISH15M = 0, MinRSISH15M = 0,
+
+        ColorD = NoColor,ThrClrD = "" ,ChngVD = 0.0 , ChngPD = 0.0 , BSizeD = 0.0 , CSizeD = 0.0 , DojiD = false , HamD = false , InvHamD = false , MornStarD = false ,
+        HHLLD = false , EngulfD = false , OutD = false , InD = false, LastInD = 0 ,BreakOutFromD = 0 , BodyBiggerThanD = 0 , CandleBiggerThanD = 0 , CountMarbD = 0 ,
+        SMA20VD = 0.0 , SMA20SD = 0.0 , SMA20DiD = 0 , SMA50VD = 0.0 , SMAsDiD = 0.0 , ATRD = 0 , RSID = 0, RSISD = 0)
